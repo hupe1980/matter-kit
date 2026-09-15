@@ -1,0 +1,5 @@
+# cargo-fuzz corpora and artifacts, which are build output rather than source.
+corpus/
+artifacts/
+coverage/
+target/

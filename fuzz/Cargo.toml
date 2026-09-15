@@ -1,0 +1,45 @@
+# A workspace of its own: `cargo fuzz` builds with sanitizer flags, and a member of the
+# main workspace would pull `libfuzzer-sys` into every ordinary `cargo build`.
+[package]
+name = "matter-kit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+matter-kit = { path = ".." }
+
+[[bin]]
+name = "tlv"
+path = "fuzz_targets/tlv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tlv_roundtrip"
+path = "fuzz_targets/tlv_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pase"
+path = "fuzz_targets/pase.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The fuzzers want wall-clock time, not a pull request.
+    - cron: "23 4 * * *"
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --features std
+      # The default build is the one a device ships: no_std, no allocation. Its tests are
+      # the ones that must not quietly depend on `std` having been linked by something
+      # else in the feature matrix.
+      - run: cargo test --no-default-features
+
+  features:
+    name: Feature powerset
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
+      # Features are additive by design (concepts/ARCHITECTURE.md). A combination that
+      # fails to build is a feature that is not, and the only way to find out is to try
+      # them all.
+      - run: cargo hack check --feature-powerset --no-dev-deps
+
+  embedded:
+    name: no_std targets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [thumbv7em-none-eabihf, riscv32imac-unknown-none-elf]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      # Building for a target with no operating system is what actually proves `no_std`:
+      # a `cfg` that accidentally pulls in `std` fails here and nowhere else.
+      - run: cargo build --target ${{ matrix.target }}
+      - run: cargo build --target ${{ matrix.target }} --features defmt
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --features std --all-targets
+      - run: cargo clippy --no-default-features
+      - run: cargo doc --features std --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Kept in step with `rust-version` in Cargo.toml. A bump is a deliberate act.
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --features std
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-fuzz
+      # A minute each on a pull request, to catch a regression that a new corpus entry
+      # would find immediately. The nightly schedule is where they get real time.
+      - run: |
+          for target in tlv tlv_roundtrip message pase; do
+            cargo fuzz run "$target" -- \
+              -max_total_time=${{ github.event_name == 'schedule' && 600 || 60 }} \
+              -rss_limit_mb=4096
+          done
+
+  deny:
+    name: Licenses and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

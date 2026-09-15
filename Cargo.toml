@@ -1,0 +1,125 @@
+# `fuzz/` is a workspace of its own: `cargo fuzz` builds it with sanitizer flags, and a
+# member here would pull `libfuzzer-sys` into every ordinary `cargo build`.
+[workspace]
+exclude = ["fuzz"]
+
+[package]
+name = "matter-kit"
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+description = "Matter (CSA smart-home standard) protocol implementation in Rust: no_std, no-alloc, executor-agnostic"
+repository = "https://github.com/hupe1980/matter-kit"
+homepage = "https://github.com/hupe1980/matter-kit"
+documentation = "https://docs.rs/matter-kit"
+keywords = ["matter", "smart-home", "iot", "thread", "embedded"]
+categories = ["network-programming", "embedded", "encoding", "no-std"]
+readme = "README.md"
+exclude = ["specs/", "concepts/", "site/"]
+
+[lib]
+name = "matter_kit"
+
+[features]
+# The default build is the certifiable device build: `no_std`, no allocation, UDP + MRP.
+default = ["rustcrypto"]
+
+# Allocation. Unlocks the TCP transport and its large payloads, and the growable
+# collections a controller on a big machine wants.
+alloc = []
+# The operating system: sockets, a file-backed key-value store, `std::error::Error`.
+std = ["alloc"]
+
+# The cryptographic backend. The cryptosuite itself is fixed by the specification —
+# "There is no cryptosuite negotiation in this protocol: one version of the Message Format
+# has one cryptosuite" (Core ch. 3) — so what a feature selects is the *implementation*,
+# not the algorithms: software here, an accelerator or a vendor library later.
+rustcrypto = [
+    "dep:sha2", "dep:hmac", "dep:hkdf", "dep:pbkdf2",
+    "dep:aes", "dep:ccm", "dep:ctr",
+    "dep:p256", "dep:elliptic-curve", "dep:rand_core",
+]
+
+# Core §2.13 provisional items. Never on by default: a provisional mechanism is not
+# certifiable and may change in 1.6.x (concepts/DECISIONS.md D9).
+provisional = []
+
+# Logging backends. Mutually exclusive in practice; `log` wins if both are named.
+log = ["dep:log"]
+defmt = ["dep:defmt", "heapless/defmt"]
+
+[dependencies]
+# Fixed-capacity collections. The whole crate is sized by `Config` (D3), and these are
+# what a `Config` constant turns into: `heapless::Vec<T, N>` with `N` from the trait.
+heapless = { version = "0.9", default-features = false }
+bitflags = { version = "2.5", default-features = false }
+log = { version = "0.4", default-features = false, optional = true }
+defmt = { version = "1", optional = true }
+
+# Constant-time comparison and key wiping are not optional: they are how the crate avoids
+# leaking a MIC one byte at a time, and how a key stops existing when it is dropped.
+subtle = { version = "2.6", default-features = false }
+zeroize = { version = "1.8", default-features = false, features = ["zeroize_derive"] }
+
+# The software cryptographic backend (feature `rustcrypto`).
+sha2 = { version = "0.11", default-features = false, optional = true }
+hmac = { version = "0.13", default-features = false, optional = true }
+hkdf = { version = "0.13", default-features = false, optional = true }
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"], optional = true }
+aes = { version = "0.9", default-features = false, optional = true }
+ccm = { version = "0.6", default-features = false, optional = true }
+ctr = { version = "0.10", default-features = false, optional = true }
+p256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdh", "ecdsa"], optional = true }
+elliptic-curve = { version = "0.14", default-features = false, features = ["sec1"], optional = true }
+rand_core = { version = "0.10", default-features = false, optional = true }
+
+[dev-dependencies]
+proptest = "1"
+hex = "0.4"
+hex-literal = "1"
+
+# These exercise the cryptosuite, so a build without it has nothing to run them against.
+# Without `required-features` they would be compiled by `--no-default-features` and fail.
+[[test]]
+name = "spake2p_vectors"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "pase_over_sim"
+required-features = ["rustcrypto"]
+
+[[example]]
+name = "reliable_exchange"
+required-features = ["std"]
+
+[[example]]
+name = "commission"
+required-features = ["std", "rustcrypto"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[lints.clippy]
+# Rule 7 of concepts/README.md: every number off the wire is hostile. These are denied
+# crate-wide rather than per-module, because every module that will ever parse bytes is
+# already here or will be, and an allow-list at the module head is a decision somebody
+# has to make deliberately.
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+todo = "deny"
+unimplemented = "deny"

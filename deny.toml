@@ -1,0 +1,31 @@
+# `cargo deny` configuration.
+#
+# The dependency tree is deliberately tiny — `heapless` and `bitflags`, plus optional
+# logging — so this is less about triage and more about noticing the day that changes.
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+# Everything in the tree must be usable by a consumer who ships a commercial device.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
