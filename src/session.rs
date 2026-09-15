@@ -68,15 +68,48 @@ pub struct EstablishedKeys {
 }
 
 impl EstablishedKeys {
-    /// Derives all three from a shared secret and a salt.
+    /// The keys this node **encrypts** with, given which end of establishment it was.
+    ///
+    /// §4.14.2.7 names the two directions `I2RKey` and `R2IKey`, and which one a node uses
+    /// depends entirely on its role. Swapping them does not fail loudly — it produces a
+    /// message the peer cannot authenticate, which looks like a corrupt link rather than a
+    /// key mix-up. Naming the two directions is what keeps the question from being asked at
+    /// every call site.
+    #[must_use]
+    pub const fn sending(&self, role: Role) -> &crate::msg::SessionKeys {
+        match role {
+            Role::Initiator => &self.i2r,
+            Role::Responder => &self.r2i,
+        }
+    }
+
+    /// The keys this node **decrypts** with — the other direction from [`Self::sending`].
+    #[must_use]
+    pub const fn receiving(&self, role: Role) -> &crate::msg::SessionKeys {
+        match role {
+            Role::Initiator => &self.r2i,
+            Role::Responder => &self.i2r,
+        }
+    }
+
+    /// Derives all three from a shared secret and a salt, under `"SessionKeys"`.
     ///
     /// PASE passes an empty salt and `Ke`; CASE passes `IPK || TranscriptHash` and the
     /// ECDH shared secret. Both call the same KDF with the same info string, which is why
     /// this is one function rather than two that could drift apart.
     pub fn derive(shared_secret: &[u8], salt: &[u8]) -> Result<Self> {
+        Self::derive_with_info(shared_secret, salt, SESSION_KEYS_INFO)
+    }
+
+    /// The same derivation under a different `Info`.
+    ///
+    /// CASE resumption uses `"SessionResumptionKeys"` (§4.14.2.6.7) — the same three keys,
+    /// the same split, a different label, so that a resumed session's keys can never
+    /// collide with a fresh one's even if a secret and salt were somehow repeated.
+    pub fn derive_with_info(shared_secret: &[u8], salt: &[u8], info: &[u8]) -> Result<Self> {
         const KEY: usize = crate::crypto::SYMMETRIC_KEY_LENGTH_BYTES;
         let mut out = [0u8; 3 * KEY];
-        kdf(shared_secret, salt, SESSION_KEYS_INFO, &mut out)?;
+        kdf(shared_secret, salt, info, &mut out)?;
 
         let (Some(i2r), Some(r2i), Some(challenge)) = (
             out.get(..KEY),
@@ -111,6 +144,12 @@ pub struct SecureSession {
     /// The peer's operational Node ID. Meaningless for PASE, where nothing has proved an
     /// identity yet, so it is [`NodeId::UNSPECIFIED`] there.
     pub peer_node_id: NodeId,
+    /// The CASE Authenticated Tags the peer's operational certificate carried (§6.6.2.1.2).
+    ///
+    /// Kept on the session because §6.6.6.3 derives the access-control subject from *session
+    /// metadata*, never from the message — and the certificate that proved them is gone by the
+    /// time an interaction arrives. At most three: §6.5.6 allows a NOC no more.
+    pub peer_cats: heapless::Vec<crate::msg::CaseAuthenticatedTag, 3>,
     /// This node's own Node ID on the session's fabric.
     pub local_node_id: NodeId,
     /// The fabric, or [`FabricIndex::NONE`] for PASE.
@@ -128,10 +167,25 @@ pub struct SecureSession {
     /// "A timestamp indicating the time at which the last message was received." Drives
     /// `PeerActiveMode`.
     pub active_timestamp: Instant,
+    /// Where the peer was when it last sent on this session.
+    ///
+    /// §4.12.4 needs the transport to decide whether MRP runs at all, and a node that starts
+    /// an exchange of its own — a subscription report (§8.5.3), a BDX transfer, any command a
+    /// controller sends — needs an address to send to. An exchange the *peer* opened learns
+    /// this from the datagram that opened it; one this node opens has nothing to learn it
+    /// from, so the session remembers.
+    ///
+    /// `None` until a message has arrived, which for a session established by this node's own
+    /// handshake means the handshake's last message.
+    pub peer: Option<crate::platform::Peer>,
 }
 
 impl SecureSession {
     /// Builds a session from what establishment produced.
+    ///
+    /// `initial_counter` is a full-width random word from [`Rng`](crate::platform::Rng);
+    /// [`MessageCounter::new`] narrows it to the range §4.6.1.1 specifies, so no caller has to
+    /// know that a message counter does not start just anywhere.
     #[must_use]
     pub fn new(
         local_session_id: SessionId,
@@ -148,6 +202,7 @@ impl SecureSession {
             kind,
             role,
             peer_node_id: NodeId::UNSPECIFIED,
+            peer_cats: heapless::Vec::new(),
             local_node_id: NodeId::UNSPECIFIED,
             fabric_index: FabricIndex::NONE,
             keys,
@@ -157,6 +212,7 @@ impl SecureSession {
             mrp: MrpParams::default(),
             session_timestamp: now,
             active_timestamp: now,
+            peer: None,
         }
     }
 
@@ -347,6 +403,9 @@ mod tests {
         EstablishedKeys::derive(b"shared secret", &[]).expect("derive")
     }
 
+    /// `0` as the randomness, which §4.6.1.1's `Crypto_DRBG(len = 28) + 1` turns into a first
+    /// counter of exactly 1 — the smallest a conforming session can have, and the one value
+    /// that makes the assertions below readable.
     fn session(id: u16, role: Role) -> SecureSession {
         SecureSession::new(
             SessionId(id),
@@ -354,7 +413,7 @@ mod tests {
             SessionKind::Pase,
             role,
             keys(),
-            1,
+            0,
             Instant::ZERO,
         )
     }

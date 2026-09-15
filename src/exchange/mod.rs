@@ -41,4 +41,4 @@ pub use mrp::{
     MRP_MAX_TRANSMISSIONS, MRP_STANDALONE_ACK_TIMEOUT, Mrp, MrpParams, OnTimeout,
     SESSION_ACTIVE_INTERVAL, SESSION_ACTIVE_THRESHOLD, SESSION_IDLE_INTERVAL, backoff, with_jitter,
 };
-pub use table::{Exchange, ExchangeKey, ExchangeTable, Role};
+pub use table::{EXCHANGE_IDLE_TIMEOUT, Exchange, ExchangeKey, ExchangeTable, Role};

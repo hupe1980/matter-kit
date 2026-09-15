@@ -145,6 +145,8 @@ pub struct StdUdp {
     socket: Arc<UdpSocket>,
     inbox: Arc<Mutex<Inbox>>,
     stop: Arc<AtomicBool>,
+    /// The interface index [`StdUdp::bind_mdns`] joined the group on.
+    mdns_scope: Option<u32>,
 }
 
 impl StdUdp {
@@ -156,6 +158,67 @@ impl StdUdp {
         let addr = SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, port, 0, 0));
         let socket = UdpSocket::bind(addr).map_err(platform_error)?;
         Self::from_socket(socket)
+    }
+
+    /// Binds the mDNS port and joins Matter's link-local group (Core §4.3, RFC 6762).
+    ///
+    /// A responder has to *own* port 5353: mDNS queries are multicast to `ff02::fb:5353` and
+    /// a socket on any other port never sees them. That port is almost always already held —
+    /// by `mDNSResponder` on macOS, by Avahi on most Linux — so it is bound with
+    /// `SO_REUSEADDR` (and `SO_REUSEPORT` where it exists), which is what lets several
+    /// responders share it. This is the one thing in the crate that `std::net` cannot do:
+    /// a socket option has to be set *before* `bind`, and `std` gives no handle in between.
+    ///
+    /// `scope_id` is the interface index to join the group on, from `if_nametoindex`. It is
+    /// also the zone every *answer* must be sent with — see [`StdUdp::mdns_group`] — so `0`
+    /// is rarely what you want: some systems accept it for the join and then refuse every
+    /// send, because a link-local destination with no interface is ambiguous.
+    ///
+    /// The socket is IPv6-only. Matter's operational discovery is IPv6 (§4.3.1), and a
+    /// dual-stack socket would also receive the IPv4 mDNS traffic of every other protocol on
+    /// the link.
+    pub fn bind_mdns(scope_id: u32) -> Result<Self> {
+        use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+        let socket =
+            Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP)).map_err(platform_error)?;
+        socket.set_only_v6(true).map_err(platform_error)?;
+        socket.set_reuse_address(true).map_err(platform_error)?;
+        #[cfg(unix)]
+        socket.set_reuse_port(true).map_err(platform_error)?;
+
+        let addr = SocketAddr::V6(SocketAddrV6::new(
+            Ipv6Addr::UNSPECIFIED,
+            crate::discovery::MDNS_PORT,
+            0,
+            scope_id,
+        ));
+        socket.bind(&SockAddr::from(addr)).map_err(platform_error)?;
+
+        let mut udp = Self::from_socket(socket.into())?;
+        udp.join_multicast(crate::discovery::MDNS_IPV6_GROUP, scope_id)?;
+        udp.mdns_scope = Some(scope_id);
+        Ok(udp)
+    }
+
+    /// The address to send mDNS answers to, zoned to the interface this socket joined.
+    ///
+    /// **Not a constant**, and that is the whole point. `ff02::fb` is *link-local*, and a
+    /// link-local destination without an interface to send it on is ambiguous: the operating
+    /// system rejects it rather than guessing. A responder that sent to the bare group
+    /// address would compute perfectly correct answers and transmit none of them — with the
+    /// error arriving from `send_to`, far from the discovery code that looks wrong.
+    ///
+    /// `None` when this socket was not created by [`StdUdp::bind_mdns`].
+    #[must_use]
+    pub fn mdns_group(&self) -> Option<PeerAddr> {
+        let scope = self.mdns_scope?;
+        let mut addr = PeerAddr::with_port(
+            crate::discovery::MDNS_IPV6_GROUP,
+            crate::discovery::MDNS_PORT,
+        );
+        addr.scope_id = scope;
+        Some(addr)
     }
 
     /// Takes over an already-bound socket.
@@ -214,6 +277,7 @@ impl StdUdp {
             socket,
             inbox,
             stop,
+            mdns_scope: None,
         })
     }
 

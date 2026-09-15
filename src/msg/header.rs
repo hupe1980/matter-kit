@@ -18,6 +18,7 @@
 use bitflags::bitflags;
 
 use super::ids::{ExchangeId, GroupId, NodeId, ProtocolId, SessionId, VendorId};
+use crate::bytes::Cursor;
 use crate::error::{Error, ErrorCode, Result, bail};
 
 /// The Matter message format version this crate speaks (§4.4.1.1).
@@ -197,7 +198,7 @@ impl MessageHeader {
 
     /// Writes the header into `out`, returning how many octets it used.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
-        let mut w = Cursor::new(out);
+        let mut w = Cursor::writer(out);
 
         let mut flags = MessageFlags::from_bits_retain(MESSAGE_FORMAT_VERSION << 4);
         if self.source.is_some() {
@@ -230,7 +231,7 @@ impl MessageHeader {
 
     /// Reads a header from the front of `buf`, returning it and the rest of the message.
     pub fn decode(buf: &[u8]) -> Result<(Self, &[u8])> {
-        let mut r = Cursor::new_read(buf);
+        let mut r = Cursor::reader(buf, ErrorCode::MessageTruncated);
 
         let flags = MessageFlags::from_bits_retain(r.read_u8()?);
         let version = (flags.bits() & MessageFlags::VERSION.bits()) >> 4;
@@ -328,7 +329,7 @@ impl ProtocolHeader {
 
     /// Writes the header into `out`, returning how many octets it used.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize> {
-        let mut w = Cursor::new(out);
+        let mut w = Cursor::writer(out);
 
         let mut flags = ExchangeFlags::empty();
         if self.initiator {
@@ -358,7 +359,7 @@ impl ProtocolHeader {
 
     /// Reads a header from the front of `buf`, returning it and the application payload.
     pub fn decode(buf: &[u8]) -> Result<(Self, &[u8])> {
-        let mut r = Cursor::new_read(buf);
+        let mut r = Cursor::reader(buf, ErrorCode::MessageTruncated);
 
         let flags = ExchangeFlags::from_bits_retain(r.read_u8()?);
         let opcode = r.read_u8()?;
@@ -394,122 +395,6 @@ impl ProtocolHeader {
             opcode,
         };
         Ok((header, r.rest()))
-    }
-}
-
-/// A bounds-checked little-endian cursor.
-///
-/// Small enough to be obvious, which is the point: every read and write in a message
-/// header goes through it, so "did that one forget to check the length?" has one answer.
-struct Cursor<'a> {
-    write: Option<&'a mut [u8]>,
-    read: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Cursor<'a> {
-    fn new(out: &'a mut [u8]) -> Self {
-        Self {
-            write: Some(out),
-            read: &[],
-            pos: 0,
-        }
-    }
-
-    fn new_read(buf: &'a [u8]) -> Self {
-        Self {
-            write: None,
-            read: buf,
-            pos: 0,
-        }
-    }
-
-    const fn position(&self) -> usize {
-        self.pos
-    }
-
-    fn rest(&self) -> &'a [u8] {
-        self.read.get(self.pos..).unwrap_or(&[])
-    }
-
-    fn advance(&mut self, n: usize) -> Result<usize> {
-        let start = self.pos;
-        self.pos = self
-            .pos
-            .checked_add(n)
-            .ok_or(Error::new(ErrorCode::MessageTruncated))?;
-        Ok(start)
-    }
-
-    fn skip(&mut self, n: usize) -> Result<()> {
-        let start = self.advance(n)?;
-        if self.read.get(start..self.pos).is_none() {
-            bail!(MessageTruncated)
-        }
-        Ok(())
-    }
-
-    fn put(&mut self, bytes: &[u8]) -> Result<()> {
-        let start = self.advance(bytes.len())?;
-        let Some(buf) = self.write.as_mut() else {
-            bail!(InvalidState)
-        };
-        let Some(dst) = buf.get_mut(start..self.pos) else {
-            bail!(BufferTooSmall)
-        };
-        dst.copy_from_slice(bytes);
-        Ok(())
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let start = self.advance(n)?;
-        self.read
-            .get(start..self.pos)
-            .ok_or(Error::new(ErrorCode::MessageTruncated))
-    }
-
-    fn u8(&mut self, v: u8) -> Result<()> {
-        self.put(&[v])
-    }
-    fn u16(&mut self, v: u16) -> Result<()> {
-        self.put(&v.to_le_bytes())
-    }
-    fn u32(&mut self, v: u32) -> Result<()> {
-        self.put(&v.to_le_bytes())
-    }
-    fn u64(&mut self, v: u64) -> Result<()> {
-        self.put(&v.to_le_bytes())
-    }
-}
-
-/// The reading half. Separate names so a misuse is a compile error, not a silent zero.
-impl Cursor<'_> {
-    fn read_u8(&mut self) -> Result<u8> {
-        let b = self.take(1)?;
-        b.first()
-            .copied()
-            .ok_or(Error::new(ErrorCode::MessageTruncated))
-    }
-    fn read_u16(&mut self) -> Result<u16> {
-        let b = self.take(2)?;
-        let arr: [u8; 2] = b
-            .try_into()
-            .map_err(|_| Error::new(ErrorCode::MessageTruncated))?;
-        Ok(u16::from_le_bytes(arr))
-    }
-    fn read_u32(&mut self) -> Result<u32> {
-        let b = self.take(4)?;
-        let arr: [u8; 4] = b
-            .try_into()
-            .map_err(|_| Error::new(ErrorCode::MessageTruncated))?;
-        Ok(u32::from_le_bytes(arr))
-    }
-    fn read_u64(&mut self) -> Result<u64> {
-        let b = self.take(8)?;
-        let arr: [u8; 8] = b
-            .try_into()
-            .map_err(|_| Error::new(ErrorCode::MessageTruncated))?;
-        Ok(u64::from_le_bytes(arr))
     }
 }
 

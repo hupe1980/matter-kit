@@ -126,6 +126,17 @@ impl Instant {
         self.0
     }
 
+    /// As milliseconds since the origin — Core §7.18.2.6's `systime-ms`.
+    ///
+    /// Truncating, like every other reading of a coarser clock from a finer one. The
+    /// specification's own use of it is a client correlating its clock with the node's
+    /// (§11.12.7.3), where a sub-millisecond difference is below the jitter of the message
+    /// carrying it.
+    #[must_use]
+    pub const fn as_millis(self) -> u64 {
+        self.0 / 1000
+    }
+
     /// This instant plus a span, saturating.
     #[must_use]
     pub const fn saturating_add(self, d: Duration) -> Self {

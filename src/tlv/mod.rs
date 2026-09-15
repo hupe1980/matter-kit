@@ -80,10 +80,30 @@ mod types;
 mod writer;
 
 mod canonical;
+pub mod codec;
 mod pretty;
 
+use crate::error::{Error, ErrorCode, Result};
 pub use canonical::{re_encode_is_identical, validate_canonical};
-pub use pretty::Pretty;
+pub use codec::{FromTlv, Nullable, TlvList, ToTlv};
+
+pub use pretty::{Pretty, PrettyIn};
 pub use reader::{Element, MAX_DEPTH, TlvReader, Value};
 pub use types::{COMMON_PROFILE, ContainerKind, ElementType, Tag, Width};
-pub use writer::TlvWriter;
+pub use writer::{Checkpoint, TlvWriter};
+
+/// Stores a structure member's value, refusing a second one with the same tag.
+///
+/// Core §A.5.1: "All member elements within a structure SHALL have a unique tag as compared
+/// to the other members of the structure." A decoder that let the last occurrence win would
+/// accept a payload two readers could disagree about — and for anything signed, that
+/// disagreement survives the signature, because both readings are over the same bytes.
+///
+/// Used by every decoder whose payload is inside a signature or a transcript hash.
+pub fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<()> {
+    if slot.is_some() {
+        return Err(Error::new(ErrorCode::TlvDuplicateTag));
+    }
+    *slot = Some(value);
+    Ok(())
+}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Matter {{ config.extra.spec_version }} · Rust · <code>no_std</code></p>
+    <h1>The Matter stack, sized at compile time.</h1>
+    <p class="lede">{{ section.extra.tagline }}</p>
+    <div class="cta">
+      <a class="btn primary" href="{{ get_url(path='@/docs/getting-started.md') }}">Get started</a>
+      <a class="btn" href="{{ config.extra.docs_rs }}" rel="noopener">API reference</a>
+    </div>
+    <pre class="install"><code>cargo add matter-kit</code></pre>
+    <p class="note">{{ section.extra.status_note }}</p>
+  </div>
+</section>
+
+<section class="wrap pillars" aria-label="Design">
+  <h2>Four decisions that are hard to retrofit</h2>
+  <div class="grid">
+  {%- for p in section.extra.pillars %}
+    <article class="card">
+      <h3>{{ p.title }}</h3>
+      <p>{{ p.body }}</p>
+    </article>
+  {%- endfor %}
+  </div>
+</section>
+
+<section class="wrap sample" aria-label="Example">
+  <h2>Sizing is a type, not a build flag</h2>
+  <p>
+    Every table in the stack — fabrics, sessions, exchanges, subscriptions, access-control
+    entries — is a fixed-capacity array whose length comes from a trait. The specification's
+    minima are <code>const</code> assertions, so a node that could not pass certification does
+    not compile.
+  </p>
+{{ section.content | safe }}
+</section>
+
+<section class="wrap closing">
+  <h2>Where to go next</h2>
+  <ul class="next">
+    <li><a href="{{ get_url(path='@/docs/getting-started.md') }}">Getting started</a> — install, serve a node, run the examples.</li>
+    <li><a href="{{ get_url(path='@/docs/matter-in-ten-minutes.md') }}">Matter in ten minutes</a> — fabrics, clusters, commissioning, explained from scratch.</li>
+    <li><a href="{{ get_url(path='@/docs/status.md') }}">Status</a> — what is built, layer by layer.</li>
+  </ul>
+</section>
+
+{% endblock content %}

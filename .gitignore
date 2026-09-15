@@ -25,3 +25,13 @@ concepts/
 
 # CSA Matter specifications (free to download from csa-iot.org but not redistributable)
 specs/
+
+# The CSA machine-readable data model, which `matter-gen` reads. On the same footing as the
+# PDFs: every file carries the CSA's own copyright notice, granting a licence to "view,
+# download, save, reproduce and use the document solely for your own internal purposes" and
+# explicitly not authorising republication. Fetch it from project-chip/connectedhomeip; what
+# *is* committed is the generated Rust under src/clusters/generated/.
+data_model/
+
+# Zola build output
+site/public/

@@ -49,6 +49,17 @@ pub enum Value<'a> {
 }
 
 impl Value<'_> {
+    /// Whether this is TLV null.
+    ///
+    /// Matter's `X` quality makes null a *value*, distinct from an absent field: §11.9.6.6's
+    /// `LastNetworkingStatus` is null when nothing has been attempted and `0` when the last
+    /// attempt succeeded, which are different claims. A decoder that treated the two alike
+    /// would report success for a device that has never tried.
+    #[must_use]
+    pub const fn is_null(self) -> bool {
+        matches!(self, Self::Null)
+    }
+
     /// The container this value opens, if it opens one.
     #[must_use]
     pub const fn container(self) -> Option<ContainerKind> {
@@ -120,6 +131,13 @@ pub struct TlvReader<'a> {
     /// Set once the single top-level element of §A.1 has been fully read, so that a
     /// second one is reported rather than silently accepted.
     top_level_done: bool,
+    /// Whether this cursor reads a container's *members* rather than one element.
+    ///
+    /// §A.1's "single top-level element" is a rule about an encoding, and a members fragment
+    /// is not one — it is the inside of a container whose punctuation is somewhere else. A
+    /// reader that applied the rule anyway would accept the first member and refuse the
+    /// second, which is a spectacularly confusing way to fail.
+    many: bool,
     /// Whether [`TlvReader::new_in`] made this cursor start inside a container.
     started_inside: bool,
 }
@@ -134,6 +152,7 @@ impl<'a> TlvReader<'a> {
             stack: [ContainerKind::Structure; MAX_DEPTH],
             depth: 0,
             top_level_done: false,
+            many: false,
             started_inside: false,
         }
     }
@@ -155,6 +174,31 @@ impl<'a> TlvReader<'a> {
             stack: [container; MAX_DEPTH],
             depth: 1,
             top_level_done: false,
+            many: false,
+            started_inside: true,
+        }
+    }
+
+    /// A cursor over the *members* of a container — many elements, not one.
+    ///
+    /// [`TlvReader::new_in`] reads a fragment that will be spliced in as a single element, and
+    /// holds it to §A.1's "single top-level element". This reads the inside of a container
+    /// whose opening and closing octets live somewhere else, so the rule does not apply:
+    /// [`TlvList`](super::TlvList) keeps a list's members that way, and a reader that refused
+    /// the second one would be applying a rule about encodings to something that is not one.
+    ///
+    /// The members must **not** include the end-of-container: that octet closes a container
+    /// this cursor was never told it is inside, and meeting it is
+    /// [`ErrorCode::TlvContainerMismatch`].
+    #[must_use]
+    pub const fn new_members(buf: &'a [u8], container: ContainerKind) -> Self {
+        Self {
+            buf,
+            pos: 0,
+            stack: [container; MAX_DEPTH],
+            depth: 1,
+            top_level_done: false,
+            many: true,
             started_inside: true,
         }
     }
@@ -249,7 +293,7 @@ impl<'a> TlvReader<'a> {
         if self.is_empty() {
             return Ok(None);
         }
-        if self.top_level_done && self.depth == self.base_depth() {
+        if self.top_level_done && !self.many && self.depth == self.base_depth() {
             // §A.1: "All valid TLV encodings consist of a single top-level element."
             bail!(TlvContainerMismatch)
         }
@@ -367,6 +411,22 @@ impl<'a> TlvReader<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The octets between `start` and the cursor — one element with its tag, when `start`
+    /// was taken immediately before reading it.
+    ///
+    /// This is how a payload whose schema belongs to somebody else is carried: an attribute's
+    /// value has a cluster's type, not the interaction model's, so the interaction model keeps
+    /// the encoded element and hands it on with
+    /// [`TlvWriter::raw_element`](super::TlvWriter::raw_element) rather than interpreting it.
+    ///
+    /// Returns [`ErrorCode::TlvTruncated`] if `start` is past the cursor, which can only
+    /// happen if a caller passed a position from a different reader.
+    pub fn slice_from(&self, start: usize) -> Result<&'a [u8]> {
+        self.buf
+            .get(start..self.pos)
+            .ok_or(Error::new(ErrorCode::TlvTruncated))
     }
 
     /// Skips whatever the given element is: a no-op for a primitive, a whole subtree for

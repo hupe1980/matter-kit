@@ -135,7 +135,20 @@ impl Spake2pVerifierData {
         out
     }
 
-    /// Reads `w0 || L`.
+    /// Reads `w0 || L`, checking that both halves are what they claim to be.
+    ///
+    /// The validation is not decoration. §11.19.8.1's `OpenCommissioningWindow` accepts a
+    /// verifier **from an administrator over the wire** and must answer `PAKEParameterError`
+    /// for one that is "incorrectly formatted or otherwise invalid" — and a verifier that was
+    /// only length-checked would be accepted here and fail much later, inside PASE, as an
+    /// inexplicable handshake failure that no commissioner could diagnose.
+    ///
+    /// `L` goes through the same point decoding every peer-supplied point does: it must be on
+    /// the curve and must not be the identity. The first is what stops an invalid-curve
+    /// attack; the second is what stops a verifier that would make every `Z` the identity and
+    /// every session key a constant. `w0` must be a canonical scalar below the group order —
+    /// a reduced-mod-`n` copy of an out-of-range value would be a *different* verifier that
+    /// re-encodes to different bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         let (Some(w0), Some(l)) = (
             bytes.get(..GROUP_SIZE_BYTES),
@@ -149,6 +162,8 @@ impl Spake2pVerifierData {
         };
         out.w0.copy_from_slice(w0);
         out.l.copy_from_slice(l);
+        canonical_scalar(&out.w0)?;
+        decode_point(&out.l)?;
         Ok(out)
     }
 }
@@ -527,6 +542,22 @@ fn scalar_from_random(random: &[u8; GROUP_SIZE_BYTES]) -> Result<Scalar> {
         return Err(Error::new(ErrorCode::InvalidArgument));
     }
     Ok(s)
+}
+
+/// A scalar that must already be canonical — strictly below the group order.
+///
+/// [`scalar_from_bytes`] *reduces* instead, which is right where the value is derived rather
+/// than received: §3.10's `w0s mod p` cannot be out of range by construction. It is wrong for
+/// a value that arrived from a peer, because reducing accepts a verifier the sender never
+/// computed and makes the bytes and the scalar disagree — the stored `w0` would re-encode to
+/// something that is not what was checked.
+fn canonical_scalar(bytes: &[u8; GROUP_SIZE_BYTES]) -> Result<Scalar> {
+    use elliptic_curve::PrimeField as _;
+
+    let mut repr = p256::FieldBytes::default();
+    repr.copy_from_slice(bytes);
+    Option::<Scalar>::from(Scalar::from_repr(repr))
+        .ok_or_else(|| Error::new(ErrorCode::InvalidArgument))
 }
 
 fn scalar_from_bytes(bytes: &[u8; GROUP_SIZE_BYTES]) -> Result<Scalar> {

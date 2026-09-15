@@ -25,9 +25,47 @@ use super::types::{ContainerKind, Tag};
 #[derive(Debug, Clone, Copy)]
 pub struct Pretty<'a>(pub &'a [u8]);
 
+/// Formats a TLV **fragment** — one or more members of a container, rather than a complete
+/// top-level encoding.
+///
+/// Which tag forms are legal depends on where an element sits, so a fragment carrying a
+/// context-specific tag is valid inside a structure and invalid on its own.
+/// [`Pretty`] reads at the top level and would print `<!error>` for exactly the bytes that
+/// are correct; this reads them the way they will be read.
+///
+/// The counterpart of [`TlvReader::new_in`] and
+/// [`TlvWriter::new_in`](super::TlvWriter::new_in).
+///
+/// ```
+/// use matter_kit::tlv::{ContainerKind, PrettyIn};
+///
+/// // An attribute value destined for an AttributeDataIB's context-2 slot.
+/// let bytes = [0x24, 0x02, 0x2A];
+/// # #[cfg(feature = "std")]
+/// assert_eq!(
+///     std::format!("{}", PrettyIn(&bytes, ContainerKind::Structure)),
+///     "2 = 42U"
+/// );
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct PrettyIn<'a>(pub &'a [u8], pub ContainerKind);
+
 impl Display for Pretty<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut r = TlvReader::new(self.0);
+        write_tlv(f, TlvReader::new(self.0))
+    }
+}
+
+impl Display for PrettyIn<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_tlv(f, TlvReader::new_in(self.0, self.1))
+    }
+}
+
+/// The shared body of both formatters.
+fn write_tlv(f: &mut fmt::Formatter<'_>, reader: TlvReader<'_>) -> fmt::Result {
+    {
+        let mut r = reader;
         // Per level: which container is open there, and whether it has printed a member.
         let mut open = [ContainerKind::Structure; MAX_DEPTH];
         let mut empty = [true; MAX_DEPTH];

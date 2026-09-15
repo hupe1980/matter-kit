@@ -1,6 +1,6 @@
 //! An in-process network with a virtual clock.
 //!
-//! This is a supported platform, not a test fixture (concepts/DECISIONS.md D14). It
+//! This is a supported platform, not a test fixture. It
 //! implements the same traits a real machine does, so the stack above it cannot tell the
 //! difference — and it gives three things a real machine cannot:
 //!

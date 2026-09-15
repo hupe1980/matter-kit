@@ -1,0 +1,6 @@
+# `cargo xtask` — the repository's own tooling (see `xtask/`).
+#
+# An alias rather than a script so that it is discoverable from `cargo --list` and works from
+# any directory in the workspace.
+[alias]
+xtask = "run --release --package xtask --"

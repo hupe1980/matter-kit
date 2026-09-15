@@ -199,6 +199,34 @@ impl CounterWindow {
 /// counter" (§4.4.1.4) — so the counter is taken once, when the message is first built,
 /// and not again.
 ///
+/// §4.6.1.1's `Crypto_DRBG(len = 28) + 1`, applied to a full-width random word.
+///
+/// "All message counters SHALL be initialized with a random value using the
+/// `Crypto_DRBG(len = 28) + 1` primitive" — *all*, which is four counters in this crate with
+/// four different lifetimes: a secure session's (§4.6.2, randomised at establishment), the
+/// global unencrypted one (§4.6.1.2, randomised at startup), the two global group ones
+/// (§4.6.1.3) and the Check-In counter (§4.6.3), both randomised at factory reset and persisted
+/// after that. They share one rule, so they share one implementation: a counter that starts
+/// anywhere in `u32` is a rule broken four times over, or not at all.
+///
+/// The result is in `1..=2^28`. §4.6.1.1 gives the reason for the ceiling in its own words —
+/// the range is narrow "in order to maximize initial entropy while still reserving the vast
+/// majority of the range to actual counter values (roughly 2³² - 2²⁸)".
+///
+/// ```
+/// use matter_kit::msg::initial_counter;
+///
+/// assert_eq!(initial_counter(0), 1);
+/// assert_eq!(initial_counter(u32::MAX), 1 << 28);
+/// assert!((1..=(1 << 28)).contains(&initial_counter(0xDEAD_BEEF)));
+/// ```
+#[must_use]
+pub const fn initial_counter(randomness: u32) -> u32 {
+    // `& 0x0FFF_FFFF` is `Crypto_DRBG(len = 28)`: twenty-eight bits. `+ 1` moves it off zero,
+    // which §4.6.1.1 excludes, and makes 2²⁸ itself reachable.
+    (randomness & 0x0FFF_FFFF).saturating_add(1)
+}
+
 /// The initial value is random (§4.6.1.1), which is why [`MessageCounter::new`] takes one
 /// rather than starting at zero: a counter that always starts at 1 leaks how many times a
 /// device has rebooted, and makes nonce reuse across a factory reset far too easy.
@@ -211,11 +239,40 @@ pub struct MessageCounter {
 }
 
 impl MessageCounter {
-    /// Starts at `initial`, which should come from [`crate::platform::Rng`].
+    /// §4.6.1.1's initialisation, from `randomness` — which should come from
+    /// [`crate::platform::Rng`].
+    ///
+    /// "All message counters SHALL be initialized with a random value using the
+    /// `Crypto_DRBG(len = 28) + 1` primitive", so the starting value is in `1..=2^28` and not
+    /// anywhere in `u32`. The specification gives the reason in the next sentence: the range is
+    /// deliberately narrow "in order to maximize initial entropy while still reserving the vast
+    /// majority of the range to actual counter values (roughly 2³² - 2²⁸)".
+    ///
+    /// That reservation is load-bearing rather than decorative. [`take`](Self::take) refuses on
+    /// exhaustion instead of rolling over — §4.6.2 has a secure session "discarded and
+    /// re-established before any Secure Session Message Counter overflow or repetition occurs"
+    /// — so the initial value is also the size of the session's supply. Seeded from the full
+    /// `u32` a session begins on average half-way through its own lifetime, and one in four
+    /// thousand begins with under a million counters left: it stops working early, and nothing
+    /// anywhere says why.
+    ///
+    /// The narrowing lives here rather than at each caller for the same reason the peer and the
+    /// report cursor do (D82, D83). [`at`](Self::at) is for an exact value — a persisted
+    /// counter, or the end of the range in a test.
     #[must_use]
-    pub const fn new(initial: u32) -> Self {
+    pub const fn new(randomness: u32) -> Self {
+        Self::at(initial_counter(randomness))
+    }
+
+    /// A counter at exactly `value`, bypassing §4.6.1.1.
+    ///
+    /// For restoring a counter that was persisted — a group sender's counters outlive a reboot
+    /// — and for tests that need to stand at a particular point in the range. A counter for a
+    /// *new* session comes from [`new`](Self::new).
+    #[must_use]
+    pub const fn at(value: u32) -> Self {
         Self {
-            next: initial,
+            next: value,
             exhausted: false,
         }
     }
@@ -412,7 +469,7 @@ mod tests {
 
     #[test]
     fn the_sender_counter_refuses_to_reuse_a_nonce() {
-        let mut c = MessageCounter::new(u32::MAX - 1);
+        let mut c = MessageCounter::at(u32::MAX - 1);
         assert_eq!(c.take().expect("one left"), u32::MAX - 1);
         assert_eq!(
             c.take().expect("the last counter is usable"),
@@ -428,9 +485,63 @@ mod tests {
 
     #[test]
     fn the_group_sender_counter_does_roll_over() {
-        let mut c = MessageCounter::new(u32::MAX);
+        let mut c = MessageCounter::at(u32::MAX);
         assert_eq!(c.take_with_rollover(), u32::MAX);
         assert_eq!(c.take_with_rollover(), 0);
         assert_eq!(c.peek(), 1);
+    }
+
+    /// §4.6.1.1: "All message counters SHALL be initialized with a random value using the
+    /// `Crypto_DRBG(len = 28) + 1` primitive."
+    ///
+    /// A production counter is seeded from `Rng::next_u32`, so the whole `u32` is what it can
+    /// be handed; the sweep is over the boundaries of the mask plus every top-byte pattern,
+    /// which is where a wrong mask or a missing `+ 1` shows.
+    #[test]
+    fn an_initial_counter_is_inside_the_twenty_eight_bit_range() {
+        const CEILING: u32 = 1 << 28;
+        let mut seen_top = false;
+        for high in 0..=u8::MAX {
+            for low in [0x00u32, 0x01, 0x7F, 0x80, 0xFE, 0xFF] {
+                let randomness = (u32::from(high) << 24) | (low << 16) | (low << 8) | low;
+                let start = MessageCounter::new(randomness).peek();
+                assert!(
+                    (1..=CEILING).contains(&start),
+                    "{randomness:#010x} started at {start:#010x}"
+                );
+                seen_top |= start == CEILING;
+            }
+        }
+        // `+ 1` makes 2²⁸ itself reachable; a mask alone would stop one short.
+        assert!(seen_top, "the top of the range is never reached");
+        // And zero is not in it, which is the whole point of the `+ 1`.
+        assert_eq!(MessageCounter::new(0).peek(), 1);
+        assert_eq!(MessageCounter::new(u32::MAX).peek(), CEILING);
+    }
+
+    /// The counter a session is given has to leave it room to run.
+    ///
+    /// `take` refuses on exhaustion rather than rolling over (§4.6.2), so the initial value
+    /// is also the size of the session's supply. Seeding from the full `u32` left one session
+    /// in four thousand with under a million counters, which is a session that stops working
+    /// early and says nothing about why.
+    #[test]
+    fn an_initial_counter_leaves_the_session_its_supply() {
+        const RESERVED: u32 = u32::MAX - (1 << 28);
+        for randomness in [0, 1, u32::MAX, u32::MAX - 1, 0xFFFF_0000, 0x8000_0000] {
+            let remaining = u32::MAX - MessageCounter::new(randomness).peek();
+            assert!(
+                remaining >= RESERVED,
+                "{randomness:#010x} left only {remaining} counters"
+            );
+        }
+    }
+
+    /// `at` is the escape hatch, and it really does bypass the narrowing — otherwise the tests
+    /// that stand at the end of the range would be standing somewhere else.
+    #[test]
+    fn at_takes_the_value_it_is_given() {
+        assert_eq!(MessageCounter::at(u32::MAX).peek(), u32::MAX);
+        assert_eq!(MessageCounter::at(0).peek(), 0);
     }
 }

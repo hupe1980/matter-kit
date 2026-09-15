@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="{{ config.default_language }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+{%- set page_title = title | default(value=false) -%}
+{%- set page_desc = description | default(value=config.description) -%}
+{%- set canonical = permalink | default(value=config.base_url) -%}
+
+<title>{% if page_title %}{{ page_title }} — {{ config.title }}{% else %}{{ config.title }} — Matter {{ config.extra.spec_version }} in Rust{% endif %}</title>
+<meta name="description" content="{{ page_desc }}">
+<link rel="canonical" href="{{ canonical | safe }}">
+
+<meta property="og:type" content="{% if page_title %}article{% else %}website{% endif %}">
+<meta property="og:site_name" content="{{ config.title }}">
+<meta property="og:title" content="{% if page_title %}{{ page_title }}{% else %}{{ config.title }}{% endif %}">
+<meta property="og:description" content="{{ page_desc }}">
+<meta property="og:url" content="{{ canonical | safe }}">
+<meta property="og:image" content="{{ get_url(path=config.extra.og_image) }}">
+<meta property="og:locale" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{% if page_title %}{{ page_title }}{% else %}{{ config.title }}{% endif %}">
+<meta name="twitter:description" content="{{ page_desc }}">
+<meta name="twitter:image" content="{{ get_url(path=config.extra.og_image) }}">
+
+<meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+
+<link rel="icon" href="{{ get_url(path='favicon.svg') }}" type="image/svg+xml">
+<link rel="alternate" type="application/atom+xml" title="{{ config.title }}" href="{{ get_url(path='atom.xml', trailing_slash=false) }}">
+<link rel="stylesheet" href="{{ get_url(path='main.css') }}">
+{#- Syntax highlighting is emitted as classes, one stylesheet per colour scheme, so the
+    code blocks follow the reader's light/dark preference like everything else. #}
+<link rel="stylesheet" href="{{ get_url(path='giallo-light.css') }}" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="{{ get_url(path='giallo-dark.css') }}" media="(prefers-color-scheme: dark)">
+
+{%- if page_title %}
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle",
+ "headline":{{ page_title | json_encode | safe }},
+ "description":{{ page_desc | json_encode | safe }},
+ "url":{{ canonical | json_encode | safe }},
+ "inLanguage":"en",
+ "isPartOf":{"@type":"WebSite","name":{{ config.title | json_encode | safe }},"url":{{ config.base_url | json_encode | safe }}},
+ "author":{"@type":"Person","name":{{ config.author | json_encode | safe }}},
+ "about":{"@type":"Thing","name":"Matter smart home standard"}}
+</script>
+{%- else %}
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareSourceCode",
+ "name":{{ config.title | json_encode | safe }},
+ "description":{{ config.description | json_encode | safe }},
+ "url":{{ config.base_url | json_encode | safe }},
+ "codeRepository":{{ config.extra.repo | json_encode | safe }},
+ "programmingLanguage":{"@type":"ComputerLanguage","name":"Rust"},
+ "license":"https://spdx.org/licenses/Apache-2.0.html",
+ "author":{"@type":"Person","name":{{ config.author | json_encode | safe }}},
+ "applicationCategory":"DeveloperApplication",
+ "keywords":"Matter, CSA, smart home, Rust, no_std, embedded, Thread, IoT, protocol"}
+</script>
+{%- endif %}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="{{ get_url(path='@/_index.md') }}">
+      <span class="brand-mark" aria-hidden="true">◇</span>
+      <span class="brand-name">matter-kit</span>
+    </a>
+    <nav aria-label="Main">
+      <ul>
+      {%- for item in config.extra.nav.items %}
+        <li><a href="{% if item.external %}{{ item.url }}{% else %}{{ get_url(path=item.url) }}{% endif %}"{% if item.external %} rel="noopener"{% endif %}>{{ item.name }}</a></li>
+      {%- endfor %}
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock content %}
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <p>
+      <a href="{{ config.extra.repo }}" rel="noopener">Source</a> ·
+      <a href="{{ config.extra.docs_rs }}" rel="noopener">API reference</a> ·
+      Dual-licensed MIT OR Apache-2.0
+    </p>
+    <p class="fine">
+      Matter® is a registered trademark of the Connectivity Standards Alliance. This project
+      is not affiliated with or endorsed by the Alliance, and nothing here is a certified
+      implementation.
+    </p>
+  </div>
+</footer>
+</body>
+</html>

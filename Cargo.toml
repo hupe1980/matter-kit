@@ -1,7 +1,10 @@
-# `fuzz/` is a workspace of its own: `cargo fuzz` builds it with sanitizer flags, and a
-# member here would pull `libfuzzer-sys` into every ordinary `cargo build`.
+# `fuzz/` and `interop/` are workspaces of their own. `cargo fuzz` builds the first with
+# sanitizer flags, and a member here would pull `libfuzzer-sys` into every ordinary
+# `cargo build`; the second depends on `rs-matter`, whose 217 crates would otherwise land in
+# this crate's dependency graph, its feature powerset and its MSRV.
 [workspace]
-exclude = ["fuzz"]
+members = ["xtask"]
+exclude = ["fuzz", "interop"]
 
 [package]
 name = "matter-kit"
@@ -25,11 +28,16 @@ name = "matter_kit"
 # The default build is the certifiable device build: `no_std`, no allocation, UDP + MRP.
 default = ["rustcrypto"]
 
-# Allocation. Unlocks the TCP transport and its large payloads, and the growable
-# collections a controller on a big machine wants.
+# Allocation: the growable collections a controller on a big machine wants. Not TCP —
+# `transport::tcp` is sized by `Config::MAX_TCP_MSG` like every other table here.
 alloc = []
 # The operating system: sockets, a file-backed key-value store, `std::error::Error`.
-std = ["alloc"]
+#
+# `socket2` comes with it, and only for one thing: binding the mDNS port with SO_REUSEADDR.
+# `std::net` cannot set a socket option before `bind`, and `unsafe_code` is forbidden here, so
+# there is no way to reach `setsockopt` without it — and without SO_REUSEADDR a node cannot
+# bind 5353 on any machine already running Avahi or mDNSResponder, which is every developer's.
+std = ["alloc", "dep:socket2"]
 
 # The cryptographic backend. The cryptosuite itself is fixed by the specification —
 # "There is no cryptosuite negotiation in this protocol: one version of the Message Format
@@ -41,9 +49,22 @@ rustcrypto = [
     "dep:p256", "dep:elliptic-curve", "dep:rand_core",
 ]
 
+# Multi-threaded controllers. Swaps `sync::Shared`'s `RefCell` for a `std::sync::Mutex`, so a
+# controller's state is `Send + Sync` and its run future can be spawned on a work-stealing
+# runtime. A device never wants this: it is single-threaded by construction (D13), and a mutex
+# turns a double-borrow that would have panicked at the mistake into a deadlock elsewhere.
+sync-mutex = ["std"]
+
 # Core §2.13 provisional items. Never on by default: a provisional mechanism is not
-# certifiable and may change in 1.6.x (concepts/DECISIONS.md D9).
+# certifiable and may change in a 1.6.x revision.
 provisional = []
+
+# Wi-Fi Public Action Frame transport (Core §4.20). A hardware capability, not a protocol
+# choice: PAFTP needs a chipset that can send Public Action Frames outside an association.
+paf = []
+
+# NFC transport (Core §4.21), likewise: NTL needs an NFC-A radio and an ISO-DEP stack.
+nfc = []
 
 # Logging backends. Mutually exclusive in practice; `log` wins if both are named.
 log = ["dep:log"]
@@ -74,13 +95,18 @@ p256 = { version = "0.14", default-features = false, features = ["arithmetic", "
 elliptic-curve = { version = "0.14", default-features = false, features = ["sec1"], optional = true }
 rand_core = { version = "0.10", default-features = false, optional = true }
 
+# Binding the mDNS port with SO_REUSEADDR; `std` only. See the `std` feature.
+socket2 = { version = "0.6", default-features = false, features = ["all"], optional = true }
+
 [dev-dependencies]
-proptest = "1"
+# Test vectors only. Every one of the specification's worked examples is written as the
+# specification prints it — hex — so that a transcription error is visible in the diff
+# rather than hidden in a byte array nobody can read against the document.
 hex = "0.4"
 hex-literal = "1"
 
-# These exercise the cryptosuite, so a build without it has nothing to run them against.
-# Without `required-features` they would be compiled by `--no-default-features` and fail.
+# Feature-gated tests. `required-features` rather than a `#![cfg]` in the file: the binary is
+# then not built at all under `--no-default-features`, instead of built empty.
 [[test]]
 name = "spake2p_vectors"
 required-features = ["rustcrypto"]
@@ -89,12 +115,128 @@ required-features = ["rustcrypto"]
 name = "pase_over_sim"
 required-features = ["rustcrypto"]
 
+[[test]]
+name = "cert_vectors"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "cert_future_extension"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "session_params"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "fabric_vectors"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "attestation_vectors"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "im_write_invoke"
+required-features = ["std"]
+
+[[test]]
+name = "im_read_server"
+required-features = ["std"]
+
+[[test]]
+name = "im_encoding"
+required-features = ["std"]
+
+[[test]]
+name = "im_chunking"
+required-features = ["std"]
+
+[[test]]
+name = "im_list_writes"
+required-features = ["std"]
+
+[[test]]
+name = "im_dispatch"
+required-features = ["std"]
+
+[[test]]
+name = "acl"
+required-features = ["std"]
+
+[[test]]
+name = "commission_over_messaging"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "commission_over_btp"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "icd"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "diagnostics"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "conformance"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "on_off"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "generated_types"
+required-features = ["std", "rustcrypto"]
+
+[[test]]
+name = "mdns_socket"
+required-features = ["std"]
+
+[[test]]
+name = "mdns_delivery"
+required-features = ["std"]
+
+[[test]]
+name = "atomic_writes"
+required-features = ["std"]
+
+[[test]]
+name = "dac_chain_vectors"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "case_over_sim"
+required-features = ["rustcrypto", "std"]
+
+[[test]]
+name = "admin_commissioning"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "opcreds_over_im"
+required-features = ["rustcrypto"]
+
+[[test]]
+name = "discovery"
+required-features = ["rustcrypto"]
+
 [[example]]
 name = "reliable_exchange"
 required-features = ["std"]
 
 [[example]]
 name = "commission"
+required-features = ["std", "rustcrypto"]
+
+[[example]]
+name = "light"
+required-features = ["std", "rustcrypto"]
+
+[[example]]
+name = "bridge"
 required-features = ["std", "rustcrypto"]
 
 [profile.release]
@@ -112,7 +254,7 @@ unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [lints.clippy]
-# Rule 7 of concepts/README.md: every number off the wire is hostile. These are denied
+# Every number off the wire is hostile. These are denied
 # crate-wide rather than per-module, because every module that will ever parse bytes is
 # already here or will be, and an allow-list at the module head is a decision somebody
 # has to make deliberately.

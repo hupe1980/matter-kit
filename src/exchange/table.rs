@@ -13,7 +13,7 @@ use super::mrp::{Mrp, MrpParams};
 use crate::config::{AssertValid, Config};
 use crate::error::{Error, ErrorCode, Result};
 use crate::msg::{ExchangeId, ProtocolId, SessionId};
-use crate::platform::Instant;
+use crate::platform::{Duration, Instant, Peer};
 
 /// Which end of an exchange a node is (Core §4.4.3.1, the **I** flag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,8 +62,30 @@ pub struct Exchange {
     pub protocol: ProtocolId,
     /// Its reliability state.
     pub mrp: Mrp,
-    /// When it was opened, so that an abandoned one can be reaped.
+    /// Where the peer is, once a message has arrived from it or the caller has said.
+    ///
+    /// It decides two things: where a reply goes, and — per Core §4.12.4 — whether MRP runs
+    /// on this exchange at all, since BTP and TCP carry their own reliability.
+    pub peer: Option<Peer>,
+    /// When it was opened.
     pub opened: Instant,
+    /// When a message last arrived on it or went out on it.
+    ///
+    /// This, not [`Exchange::opened`], is what [`ExchangeTable::reap`] judges: a chunked read
+    /// or a BDX transfer is legitimately long-lived, and reaping by age would cut it off
+    /// mid-transfer. What must not survive is an exchange nothing is *using*.
+    pub last_activity: Instant,
+    /// Whether this is §4.10.5.2's *ephemeral* exchange.
+    ///
+    /// "Create an ephemeral exchange from the incoming message and send an immediate
+    /// standalone acknowledgement … The message SHALL NOT be forwarded to the upper layer …
+    /// The ephemeral exchange created for such duplicate or unknown messages with R Flag set
+    /// is automatically closed in Standalone acknowledgement processing."
+    ///
+    /// It exists for exactly one reason: a reliable message this node cannot act on still owes
+    /// its sender an acknowledgement, or the sender retransmits it five times. Holding a real
+    /// exchange open to do that is what lets a stranger fill the table.
+    pub ephemeral: bool,
 }
 
 impl Exchange {
@@ -74,10 +96,82 @@ impl Exchange {
             key,
             protocol,
             mrp: Mrp::new(params),
+            peer: None,
             opened: now,
+            last_activity: now,
+            ephemeral: false,
         }
     }
+
+    /// The same exchange, marked ephemeral (§4.10.5.2).
+    #[must_use]
+    pub const fn ephemeral(mut self) -> Self {
+        self.ephemeral = true;
+        self
+    }
+
+    /// Records that a message arrived on this exchange or went out on it.
+    pub const fn touch(&mut self, now: Instant) {
+        self.last_activity = now;
+    }
+
+    /// Whether nothing has used this exchange for `idle` and nothing is pending on it.
+    ///
+    /// §4.10.5.3 step 2 is the second half: "Wait for all pending retransmissions associated
+    /// with the Exchange to complete. If the retransmission list for the Exchange is empty,
+    /// remove the Exchange. Otherwise, leave the Exchange open and only close it once the
+    /// retransmission list is empty." An exchange still trying to deliver something is not
+    /// abandoned, however quiet the peer has been.
+    #[must_use]
+    pub fn is_abandoned(&self, now: Instant, idle: Duration) -> bool {
+        // "the retransmission list" — a message still awaiting acknowledgement, not merely any
+        // timer. An exchange can also hold a standalone acknowledgement it owes the peer, and
+        // one still owed after the idle timeout means nobody drove the timers at all; letting
+        // that pin an entry forever is the leak this is here to close.
+        if self.mrp.is_awaiting_ack() {
+            return false;
+        }
+        now.as_micros()
+            .saturating_sub(self.last_activity.as_micros())
+            > idle.as_micros()
+    }
+
+    /// The same exchange with its peer known from the start — what an initiator has, since
+    /// it chose who to talk to.
+    #[must_use]
+    pub fn to_peer(mut self, peer: Peer) -> Self {
+        self.peer = Some(peer);
+        self
+    }
+
+    /// Whether the transport underneath supplies its own reliability, so §4.12.4's "SHOULD
+    /// NOT set the R Flag" applies.
+    ///
+    /// An exchange whose peer is not yet known is assumed to be on UDP: MRP is the default
+    /// and the conservative choice, since an unnecessary acknowledgement costs a round trip
+    /// while a missing one costs the message.
+    #[must_use]
+    pub fn is_transport_reliable(&self) -> bool {
+        self.peer.is_some_and(|p| p.is_reliable())
+    }
 }
+
+/// How long an exchange may sit with nothing happening on it before it is reclaimed.
+///
+/// The specification gives no figure — §4.10.5.3 leaves closing to "the application layer or a
+/// fatal connection error" — but leaving that to the application is what makes an exchange
+/// table a remotely exhaustible resource. Every unsecured message with the I Flag set opens an
+/// exchange (§4.10.5.2), and an attacker who can reach the port can send them with any exchange
+/// id it likes. Without reclamation, `N` datagrams costing nothing fill the table for good, and
+/// a node that can no longer open an exchange can no longer establish a session — PASE or CASE,
+/// for the rest of its uptime. Existing sessions keep working, which is what makes it hard to
+/// notice.
+///
+/// Sixty seconds is taken from §5.5's bound on the one exchange most worth attacking: "a
+/// Commissionee SHALL expect a PASE session to be established within 60 seconds of receiving
+/// the initial request". An exchange idle for longer than the specification allows the whole
+/// handshake is not one anybody is still using.
+pub const EXCHANGE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The fixed-capacity set of open exchanges.
 ///
@@ -142,6 +236,7 @@ impl<C: Config, const N: usize> ExchangeTable<C, N> {
         session: SessionId,
         protocol: ProtocolId,
         params: MrpParams,
+        peer: Option<Peer>,
         now: Instant,
     ) -> Result<ExchangeKey> {
         let id = self.allocate_id(session)?;
@@ -150,7 +245,11 @@ impl<C: Config, const N: usize> ExchangeTable<C, N> {
             id,
             role: Role::Initiator,
         };
-        self.insert(Exchange::new(key, protocol, params, now))?;
+        let exchange = Exchange::new(key, protocol, params, now);
+        self.insert(match peer {
+            Some(peer) => exchange.to_peer(peer),
+            None => exchange,
+        })?;
         Ok(key)
     }
 
@@ -175,14 +274,70 @@ impl<C: Config, const N: usize> ExchangeTable<C, N> {
         if self.find(key).is_some() {
             return Err(Error::new(ErrorCode::InvalidState));
         }
-        self.insert(Exchange::new(key, protocol, params, now))?;
+        self.insert_under_pressure(Exchange::new(key, protocol, params, now), now)?;
         Ok(key)
+    }
+
+    /// Opens §4.10.5.2's ephemeral exchange: one that exists only to carry a standalone
+    /// acknowledgement and is closed as soon as it has.
+    pub fn open_ephemeral(
+        &mut self,
+        session: SessionId,
+        id: ExchangeId,
+        protocol: ProtocolId,
+        params: MrpParams,
+        now: Instant,
+    ) -> Result<ExchangeKey> {
+        let key = ExchangeKey {
+            session,
+            id,
+            role: Role::Responder,
+        };
+        if let Some(existing) = self.find(key) {
+            return Ok(existing.key);
+        }
+        self.insert_under_pressure(Exchange::new(key, protocol, params, now).ephemeral(), now)?;
+        Ok(key)
+    }
+
+    /// Inserts, reclaiming abandoned entries first if the table is full.
+    ///
+    /// Reaping here as well as on the timer is what makes the bound hold for a node whose
+    /// timers are slow or stopped: the pressure that would have refused a legitimate peer is
+    /// the same pressure that proves some other entry has been idle too long.
+    fn insert_under_pressure(&mut self, exchange: Exchange, now: Instant) -> Result<()> {
+        if self.open.is_full() {
+            self.reap(now, EXCHANGE_IDLE_TIMEOUT);
+        }
+        self.insert(exchange)
     }
 
     fn insert(&mut self, exchange: Exchange) -> Result<()> {
         self.open
             .push(exchange)
             .map_err(|_| Error::new(ErrorCode::NoSpace))
+    }
+
+    /// Closes every exchange nothing has used for `idle` and nothing is pending on.
+    ///
+    /// Returns how many went. [`Messaging::poll`](crate::messaging::Messaging::poll) calls
+    /// this, so a node that drives its timers at all gets it without asking — which is the
+    /// point: an exchange table that is only reclaimed when the application remembers to
+    /// reclaim it is one an attacker reclaims on its behalf.
+    pub fn reap(&mut self, now: Instant, idle: Duration) -> usize {
+        let before = self.open.len();
+        self.open.retain(|e| !e.is_abandoned(now, idle));
+        before.saturating_sub(self.open.len())
+    }
+
+    /// When [`ExchangeTable::reap`] would next have something to do.
+    #[must_use]
+    pub fn reap_deadline(&self, idle: Duration) -> Option<Instant> {
+        self.open
+            .iter()
+            .filter(|e| !e.mrp.is_awaiting_ack())
+            .map(|e| e.last_activity.saturating_add(idle))
+            .min()
     }
 
     fn allocate_id(&mut self, session: SessionId) -> Result<ExchangeId> {
@@ -321,6 +476,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::INTERACTION_MODEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -329,6 +485,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::INTERACTION_MODEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -347,6 +504,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("mine");
@@ -374,6 +532,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -442,6 +601,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("fits");
@@ -452,6 +612,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .unwrap_err()
@@ -468,6 +629,7 @@ mod tests {
                 SessionId(session),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -485,6 +647,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -501,6 +664,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -509,6 +673,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");
@@ -534,6 +699,7 @@ mod tests {
                 SessionId(1),
                 ProtocolId::SECURE_CHANNEL,
                 MrpParams::default(),
+                None,
                 Instant::ZERO,
             )
             .expect("open");

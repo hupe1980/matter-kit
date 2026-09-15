@@ -47,7 +47,7 @@ impl<'a> Peer<'a> {
     fn new(node: SimNode<'a>, first_counter: u32) -> Self {
         Self {
             node,
-            counter: MessageCounter::new(first_counter),
+            counter: MessageCounter::at(first_counter),
             window: CounterWindow::new(CounterKind::SecureUnicast),
             mrp: Mrp::new(MrpParams::default()),
             delivered: heapless::Vec::new(),

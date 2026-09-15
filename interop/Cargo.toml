@@ -1,0 +1,36 @@
+# Differential tests against another implementation of the same specification.
+#
+# `interop/` is a workspace of its own, on the same footing as `fuzz/` and for a stronger
+# reason: `rs-matter` pulls 217 crates, six of them Embassy's, and a member here would put every
+# one of them in the dependency graph of an ordinary `cargo build`. matter-kit's own manifest,
+# its 288-combination feature powerset and its MSRV are all unaffected by anything in here.
+#
+# Why it exists: rule 1 of this project is that a test suite which only ever meets itself
+# measures agreement, not correctness. Everything under `tests/` is matter-kit checking its own
+# reading of the specification; the golden vectors check it against the CSA's published numbers;
+# this checks it against a *different implementation's* reading. Where the two disagree, one of
+# them is wrong, and neither's test suite can tell which — which is exactly what makes the
+# disagreement worth surfacing.
+[workspace]
+
+[package]
+name = "matter-kit-interop"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+matter-kit = { path = "..", features = ["std"] }
+
+# The other implementation. Pinned exactly: this is a differential test, and a dependency that
+# moved under it would turn "we disagree" into "something changed", which is not the same
+# finding. Bumping it is a deliberate act with a diff to read.
+rs-matter = "=0.3.0"
+
+[dev-dependencies]
+proptest = "1"
+
+# Not the library's lint table. This crate is a test harness on a developer's machine, not code
+# that faces a network.
+[lints.rust]
+unsafe_code = "forbid"

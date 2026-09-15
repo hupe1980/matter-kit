@@ -204,6 +204,76 @@ impl PeerAddr {
     }
 }
 
+/// Where a Matter message came from, or goes to, whichever transport carried it.
+///
+/// A Matter node speaks more than one at once: during commissioning a device may be answering
+/// BLE on one side and advertising over IPv6 on the other, and the reply to a message has to
+/// go back the way it came.
+///
+/// The distinction is not only routing. Core §4.12.4:
+///
+/// > Reliable messages sent over TCP, PAFTP, or BTP SHALL utilize the underlying reliability
+/// > mechanisms of those transports and SHOULD NOT set the R Flag.
+///
+/// So which transport a peer is on decides whether MRP runs at all, and
+/// [`Messaging`](crate::messaging::Messaging) reads it from here rather than trusting each
+/// caller to remember.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Peer {
+    /// A UDP peer, addressed by IPv6. MRP supplies the reliability.
+    Udp(PeerAddr),
+    /// A BLE peer, named by whatever handle the platform's stack uses for the connection.
+    /// [`btp`](crate::transport::btp) supplies the reliability.
+    Ble(u16),
+    /// A TCP peer: an address, plus the connection the stream arrived on.
+    ///
+    /// The address alone does not identify it. Core §4.15.2 lets two nodes hold more than one
+    /// connection at a time, and a reply has to go back down the one the request came up, so
+    /// the platform's own handle for the socket travels with the address.
+    /// [`tcp`](crate::transport::tcp) supplies the reliability.
+    Tcp(PeerAddr, u16),
+}
+
+impl Peer {
+    /// Whether the transport is reliable on its own, so §4.12.4 says not to set the R flag.
+    #[must_use]
+    pub const fn is_reliable(&self) -> bool {
+        match self {
+            Self::Udp(_) => false,
+            Self::Ble(_) | Self::Tcp(..) => true,
+        }
+    }
+
+    /// Whether the transport can carry a message larger than the 1280-octet IPv6 minimum
+    /// MTU, so a Large Message command (§4.4.4) may be sent over it.
+    ///
+    /// Only TCP can. §4.4.4: "The maximum size of the payload for messages sent over a TCP
+    /// connection is 1,048,576 octets", against 1280 for everything datagram-shaped. This is
+    /// what an application passes to
+    /// [`InteractionContext::with_large_messages`](crate::im::server::InteractionContext::with_large_messages),
+    /// so the data model's `L` quality is enforced against the transport that is actually
+    /// underneath rather than against a build-time guess.
+    #[must_use]
+    pub const fn supports_large_payloads(&self) -> bool {
+        matches!(self, Self::Tcp(..))
+    }
+
+    /// The IPv6 address, when there is one.
+    #[must_use]
+    pub const fn addr(&self) -> Option<PeerAddr> {
+        match self {
+            Self::Udp(addr) | Self::Tcp(addr, _) => Some(*addr),
+            Self::Ble(_) => None,
+        }
+    }
+}
+
+impl From<PeerAddr> for Peer {
+    fn from(addr: PeerAddr) -> Self {
+        Self::Udp(addr)
+    }
+}
+
 /// Sending and receiving IPv6 datagrams.
 ///
 /// This is the one transport every Matter node must have: Core §2.3 puts Matter on "any

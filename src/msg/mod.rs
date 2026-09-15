@@ -38,13 +38,16 @@ mod ids;
 #[cfg(feature = "rustcrypto")]
 mod security;
 
-pub use counter::{CounterKind, CounterWindow, MSG_COUNTER_WINDOW_SIZE, MessageCounter, Verdict};
+pub use counter::{
+    CounterKind, CounterWindow, MSG_COUNTER_WINDOW_SIZE, MessageCounter, Verdict, initial_counter,
+};
 pub use header::{
     Destination, ExchangeFlags, MESSAGE_FORMAT_VERSION, MessageFlags, MessageHeader,
     ProtocolHeader, SecurityFlags, SessionType,
 };
 pub use ids::{
-    ExchangeId, FabricId, FabricIndex, GroupId, NodeId, NodeIdKind, ProtocolId, SessionId, VendorId,
+    CaseAuthenticatedTag, ExchangeId, FabricId, FabricIndex, GroupId, NodeId, NodeIdKind,
+    ProtocolId, SessionId, VendorId,
 };
 #[cfg(feature = "rustcrypto")]
 pub use security::{NonceSource, Preview, SessionKeys, preview, protect, unprotect};

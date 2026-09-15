@@ -79,6 +79,73 @@ impl NodeId {
     }
 }
 
+/// A CASE Authenticated Tag: an access-control subject shared by a group of nodes
+/// (Core §6.6.2.1.2).
+///
+/// A CAT is carried in a node's operational certificate, so "the administrative root of
+/// trust does chain back through the individual source Node to the Fabric's trusted root".
+/// That is what makes it unlike a group key: group-*like* addressing, with per-node
+/// attribution intact.
+///
+/// The 32 bits are two halves. The upper 16 name the tag; the lower 16 are a version an
+/// administrator bumps whenever the set of nodes holding the tag changes, so that an
+/// access-control entry written against version 3 does not silently admit a node that was
+/// granted version 2 and has since been removed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CaseAuthenticatedTag(pub u32);
+
+impl CaseAuthenticatedTag {
+    /// `0xFFFF` — the Administrator identifier, reserved to the Joint Fabric (§12.2.4.1).
+    pub const ADMINISTRATOR_IDENTIFIER: u16 = 0xFFFF;
+    /// `0xFFFE` — the Anchor identifier, reserved to the Joint Fabric (§12.2.4.2).
+    pub const ANCHOR_IDENTIFIER: u16 = 0xFFFE;
+    /// The last identifier "generally available"; `0xF000..=0xFFFD` is reserved.
+    pub const GENERAL_IDENTIFIER_MAX: u16 = 0xEFFF;
+
+    /// Builds a tag from its two halves.
+    #[must_use]
+    pub const fn new(identifier: u16, version: u16) -> Self {
+        Self(((identifier as u32) << 16) | version as u32)
+    }
+
+    /// The upper 16 bits, which "uniquely identifies a CAT".
+    #[must_use]
+    pub const fn identifier(self) -> u16 {
+        (self.0 >> 16) as u16
+    }
+
+    /// The lower 16 bits.
+    #[must_use]
+    pub const fn version(self) -> u16 {
+        self.0 as u16
+    }
+
+    /// Whether the version is usable: "Version number is a monotonically increasing
+    /// natural number in the range of 1 to 65535. A version number of 0 is invalid."
+    #[must_use]
+    pub const fn is_valid(self) -> bool {
+        self.version() != 0
+    }
+
+    /// The Node ID sub-encoding a CAT takes in an access-control entry's `Subjects` list:
+    /// the tag with `0xFFFF_FFFD` above it (§6.6.2.1.2).
+    ///
+    /// "Note that this encoding cannot appear as an operational Node ID."
+    #[must_use]
+    pub const fn to_node_id(self) -> NodeId {
+        NodeId(0xFFFF_FFFD_0000_0000 | self.0 as u64)
+    }
+
+    /// Recovers a CAT from that sub-encoding, or `None` if the Node ID is not one.
+    #[must_use]
+    pub const fn from_node_id(node_id: NodeId) -> Option<Self> {
+        match node_id.kind() {
+            NodeIdKind::CaseAuthenticatedTag => Some(Self(node_id.0 as u32)),
+            _ => None,
+        }
+    }
+}
+
 /// A 16-bit Group ID (Core §2.5.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct GroupId(pub u16);

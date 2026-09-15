@@ -80,6 +80,22 @@ pub trait Config {
     /// Core §2.11.2.2: at least three per fabric.
     const SUBSCRIPTIONS: usize = 15;
 
+    /// How many subscriptions any one fabric may hold.
+    ///
+    /// §2.11.2.2 states the rule as a *guarantee*, not a cap: "A publisher SHALL ensure that
+    /// every fabric the node is commissioned into can support at least three Subscribe
+    /// Interactions to the publisher." A table with only a global limit cannot make that
+    /// promise — the first administrator to ask fills it, and every fabric commissioned
+    /// afterwards is told the node is out of resources by a node that is, from its own point
+    /// of view, working perfectly.
+    ///
+    /// So the guarantee is kept the way [`Config::ACL_ENTRIES_PER_FABRIC`] keeps §6.6's: a
+    /// fixed share each, refusing a fabric that is at its quota even when the table has room.
+    /// That is the strict reading, it is always conformant, and it cannot surprise an
+    /// administrator by granting a subscription one day and refusing it the next when what
+    /// changed was somebody else's fabric.
+    const SUBSCRIPTIONS_PER_FABRIC: usize = 3;
+
     /// How many attribute or event paths one subscription can carry.
     ///
     /// Core §2.11.2.2: at least three.
@@ -96,11 +112,36 @@ pub trait Config {
     /// Core §2.11.1.1: "at least four Access Control Entries available for every fabric".
     const ACL_ENTRIES: usize = 4 * Self::FABRICS;
 
+    /// How many access-control entries **one fabric** may hold — §9.10.6.7's
+    /// `AccessControlEntriesPerFabric`, constrained to `4 to 65534`.
+    ///
+    /// A per-fabric quota, not just a total: §2.11.1.1 requires "at least four Access Control
+    /// Entries available for every fabric supported by the node", and without a quota the
+    /// first fabric to fill the table would lock every later administrator out of granting
+    /// itself anything.
+    ///
+    /// §2.11.1.1 permits over-subscription — "if it supports N entries must enforce that any K
+    /// fabrics together do not use more than N - 4*(5-K) entries" — which would let one fabric
+    /// borrow the unused quota of another. This is the strict reading instead: a fixed share
+    /// each. It is always conformant and it cannot surprise an administrator by granting a
+    /// quota one day and refusing it the next, when what changed was another fabric.
+    const ACL_ENTRIES_PER_FABRIC: usize = 4;
+
     /// How many subjects one access-control entry can name.
+    ///
+    /// §9.10.6.5's `SubjectsPerAccessControlEntry`, constrained to `4 to 65534`.
     const ACL_SUBJECTS: usize = 4;
 
     /// How many targets one access-control entry can name.
+    ///
+    /// §9.10.6.6's `TargetsPerAccessControlEntry`, constrained to `3 to 65534`.
     const ACL_TARGETS: usize = 3;
+
+    /// Whether §9.10.4.3's Auxiliary feature is implemented.
+    ///
+    /// It changes an access decision: with it, §6.6.6.2 stops a wildcard Group entry from
+    /// reaching endpoint 0, whose clusters administer the node itself.
+    const ACL_AUXILIARY: bool = false;
 
     /// How many group memberships the node keeps, across all fabrics.
     const GROUPS: usize = 4 * Self::FABRICS;
@@ -122,8 +163,10 @@ pub trait Config {
     /// The largest message the node will accept over a stream transport.
     ///
     /// Core §4.15.2.3 calls this the "Maximum Message Size", and a peer that announces a
-    /// larger one gets `MESSAGE_TOO_LARGE` and a closed connection. Only meaningful with
-    /// the `alloc` feature, which is what unlocks TCP.
+    /// larger one gets `MESSAGE_TOO_LARGE` and a closed connection. It is the `N` of
+    /// [`tcp::Framer`](crate::transport::tcp::Framer), and the specification sets no figure:
+    /// "The system platform MAY configure a Maximum Message Size for the payload that it is
+    /// capable of receiving", so a device that cannot spare 64 KiB says so here.
     const MAX_TCP_MSG: usize = 64 * 1024;
 
     /// How many BTP (Bluetooth transport) sessions can be open at once.
@@ -158,6 +201,27 @@ impl Config for DefaultConfig {}
 /// minimal IPv6 MTU. This message size limit SHALL apply to the UDP transport."
 pub const MAX_UDP_MESSAGE: usize = 1280;
 
+/// The largest framing a secured unicast message can carry, in octets.
+///
+/// Message header: flags, session id, security flags and counter (8), a source node id (8) and
+/// a destination node id (8) — [`MessageHeader::encoded_len`](crate::msg::MessageHeader::encoded_len)'s
+/// worst case. Protocol header: flags, opcode, exchange id and protocol id (6), a vendor id (2)
+/// and an acknowledged counter (4) — [`ProtocolHeader::encoded_len`](crate::msg::ProtocolHeader::encoded_len)'s.
+/// Then §4.8's AEAD tag (16).
+pub const MAX_MESSAGE_FRAMING: usize = (8 + 8 + 8) + (6 + 2 + 4) + 16;
+
+/// The largest protocol payload that is **certain** to fit a UDP datagram once framed.
+///
+/// A node builds its reply in a payload buffer and hands it to the messaging layer, which adds
+/// the headers and the AEAD tag. So the payload bound is the datagram bound *minus the framing*,
+/// and sizing that buffer by anything else is guesswork that fails as `buffer too small` — from
+/// this node, about its own reply, with nothing on the wire to explain it.
+///
+/// It is a floor rather than an exact figure: a message with no source node id, or on a common
+/// protocol, or with nothing to acknowledge, has room to spare. Sizing to the worst case is what
+/// makes "it fits" independent of which of those happens to be true.
+pub const MAX_UDP_PAYLOAD: usize = MAX_UDP_MESSAGE.saturating_sub(MAX_MESSAGE_FRAMING);
+
 /// Compile-time proof that a [`Config`] satisfies the specification's minima.
 ///
 /// Instantiating this type evaluates its assertions; every generic entry point in the
@@ -190,6 +254,14 @@ impl<C: Config> AssertValid<C> {
         assert!(
             C::SESSIONS >= 3 * C::FABRICS,
             "Config::SESSIONS: Core §4.14.2.8 requires at least 3 CASE sessions per fabric"
+        );
+        assert!(
+            C::SUBSCRIPTIONS_PER_FABRIC >= 3,
+            "Config::SUBSCRIPTIONS_PER_FABRIC: Core §2.11.2.2 requires at least 3 per fabric"
+        );
+        assert!(
+            C::SUBSCRIPTIONS >= C::SUBSCRIPTIONS_PER_FABRIC * C::FABRICS,
+            "Config::SUBSCRIPTIONS: every fabric must be able to reach SUBSCRIPTIONS_PER_FABRIC"
         );
         assert!(
             C::SUBSCRIPTIONS >= 3 * C::FABRICS,
@@ -259,5 +331,49 @@ mod tests {
     #[test]
     fn max_udp_message_is_the_ipv6_minimum_mtu() {
         assert_eq!(MAX_UDP_MESSAGE, 1280);
+    }
+}
+
+#[cfg(test)]
+mod payload_bound {
+    use super::{MAX_MESSAGE_FRAMING, MAX_UDP_MESSAGE, MAX_UDP_PAYLOAD};
+    use crate::msg::{
+        Destination, MessageHeader, NodeId, ProtocolHeader, ProtocolId, SessionId, SessionType,
+    };
+
+    /// `MAX_MESSAGE_FRAMING` is the worst case the encoders can actually produce.
+    ///
+    /// Derived by hand from two `encoded_len` implementations, which is exactly the kind of
+    /// arithmetic that is right when written and wrong after the next field is added. So it is
+    /// checked against the encoders rather than against itself.
+    #[test]
+    fn the_framing_bound_is_what_the_headers_encode() {
+        // Every optional field present: a source node id, a destination node id, a vendor
+        // protocol and an acknowledgement.
+        let message = MessageHeader {
+            session_id: SessionId(0x1234),
+            session_type: SessionType::Unicast,
+            privacy: false,
+            control: false,
+            message_counter: 0xDEAD_BEEF,
+            source: Some(NodeId(0x0102_0304_0506_0708)),
+            destination: Destination::Node(NodeId(0x1112_1314_1516_1718)),
+        };
+        let protocol = ProtocolHeader {
+            acknowledged_counter: Some(0x0BAD_F00D),
+            protocol: ProtocolId {
+                vendor: crate::msg::VendorId(0xFFF1),
+                id: 0x0001,
+            },
+            ..ProtocolHeader::default()
+        };
+        let encoded = message.encoded_len() + protocol.encoded_len();
+        let mic = crate::crypto::AEAD_MIC_LENGTH_BYTES;
+        assert_eq!(
+            encoded + mic,
+            MAX_MESSAGE_FRAMING,
+            "the framing bound no longer matches what the headers encode"
+        );
+        assert_eq!(MAX_UDP_PAYLOAD + MAX_MESSAGE_FRAMING, MAX_UDP_MESSAGE);
     }
 }

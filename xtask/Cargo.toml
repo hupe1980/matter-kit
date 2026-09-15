@@ -1,0 +1,33 @@
+# The repository's own tooling, not part of the library.
+#
+# The generator lives here rather than as a binary of `matter-kit` for one concrete reason: it
+# imports nothing from the library. It reads the CSA data-model XML and writes Rust *text* that
+# names `matter_kit`'s types, so it has no reason to depend on the crate it writes into — and
+# every reason not to. A generator that did would have to be built from a library that includes
+# the very files it is about to replace, which is a bootstrap cycle every change to the output
+# shape breaks.
+[package]
+name = "xtask"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# Read-only, zero-copy XML. The only dependency the generator has, and now the only place in
+# the repository it appears — `matter-kit`'s own tree no longer mentions it.
+roxmltree = { version = "0.20", default-features = false }
+
+# Not the library's lint table, and deliberately. `matter-kit` denies `unwrap`, `expect`,
+# `panic!`, slice indexing and unchecked arithmetic because all of it faces a network; this
+# faces a directory of XML the developer chose, on the developer's machine, and its failure mode
+# is a build that stops with a message. What it must not do is contain `unsafe`.
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[lints.clippy]
+# The library's own table, minus the five that exist for code facing a network. `todo` and
+# `unimplemented` stay: a generator that silently skipped part of the data model would produce a
+# library missing clusters nobody asked about.
+todo = "deny"
+unimplemented = "deny"

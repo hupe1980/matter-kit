@@ -424,7 +424,7 @@ fn table_129_tag_types() {
 
 #[test]
 fn every_vector_survives_every_truncation() {
-    // Not a specification requirement — a crate one. Rule 7 of concepts/README.md: every
+    // Not a specification requirement — a crate one: every
     // number off the wire is hostile, including a length that outruns the buffer.
     for table in [TABLE_127, TABLE_128, TABLE_129] {
         for v in table {

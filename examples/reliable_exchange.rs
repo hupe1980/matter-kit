@@ -38,7 +38,7 @@ fn main() {
     let light = net.node(1);
     let controller = net.node(2);
 
-    let mut counter = MessageCounter::new(1000);
+    let mut counter = MessageCounter::at(1000);
     let mut mrp = Mrp::new(MrpParams::default());
     let mut window = CounterWindow::new(CounterKind::SecureUnicast);
     let mut delivered = 0u32;

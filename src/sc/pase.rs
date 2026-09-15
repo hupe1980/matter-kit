@@ -38,27 +38,10 @@ use crate::crypto::{
 use crate::error::{Error, ErrorCode, Result, bail};
 use crate::msg::SessionId;
 use crate::session::EstablishedKeys;
-use crate::tlv::{ContainerKind, Tag, TlvReader, TlvWriter, Value};
+use crate::tlv::{ContainerKind, Tag, TlvReader, TlvWriter, Value, set_once};
 
 use super::SessionParams;
 use super::status::{SecureChannelCode, StatusReport};
-
-/// Secure Channel opcodes for the PASE messages (Core Table 18).
-pub mod opcode {
-    /// `PBKDFParamRequest` — "The request for PBKDF parameters necessary to complete the
-    /// PASE protocol."
-    pub const PBKDF_PARAM_REQUEST: u8 = 0x20;
-    /// `PBKDFParamResponse`.
-    pub const PBKDF_PARAM_RESPONSE: u8 = 0x21;
-    /// `PASE Pake1` — "The first PAKE message of the PASE protocol."
-    pub const PAKE1: u8 = 0x22;
-    /// `PASE Pake2`.
-    pub const PAKE2: u8 = 0x23;
-    /// `PASE Pake3`.
-    pub const PAKE3: u8 = 0x24;
-    /// `StatusReport`, which carries `PakeFinished`.
-    pub const STATUS_REPORT: u8 = 0x40;
-}
 
 /// The length of the protocol randoms (§4.14.1.2).
 pub const RANDOM_LEN: usize = 32;
@@ -235,20 +218,27 @@ fn decode_pbkdf_parameters(
     if element.value.container() != Some(ContainerKind::Structure) {
         bail!(TlvWrongType)
     }
-    let mut iterations = None;
-    let mut salt: Option<heapless::Vec<u8, { crate::crypto::PBKDF_SALT_MAX_BYTES }>> = None;
-    while let Some((tag, inner)) = fields.next()? {
-        match tag {
-            1 => iterations = Some(u32_of(inner.unsigned()?)?),
-            2 => {
-                let Ok(v) = heapless::Vec::from_slice(inner.octets()?) else {
-                    bail!(InvalidArgument)
-                };
-                salt = Some(v);
+    // `Crypto_PBKDFParameterSet` is tag 4 of a `pbkdfparamresp-struct` and
+    // `responderSessionParams` is tag 5, so this nested decode must stop at its own
+    // end-of-container: without `nested`, it would consume the session parameters that
+    // follow it and the responder's MRP announcement would vanish.
+    let (iterations, salt) = fields.nested(|fields| {
+        let mut iterations = None;
+        let mut salt: Option<heapless::Vec<u8, { crate::crypto::PBKDF_SALT_MAX_BYTES }>> = None;
+        while let Some((tag, inner)) = fields.next()? {
+            match tag {
+                1 => set_once(&mut iterations, u32_of(inner.unsigned()?)?)?,
+                2 => {
+                    let Ok(v) = heapless::Vec::from_slice(inner.octets()?) else {
+                        bail!(InvalidArgument)
+                    };
+                    set_once(&mut salt, v)?;
+                }
+                _ => fields.skip(&inner)?,
             }
-            _ => fields.skip(&inner)?,
         }
-    }
+        Ok((iterations, salt))
+    })?;
     match (iterations, salt) {
         // Both present: a real parameter set, checked against §3.9's bounds.
         (Some(iterations), Some(salt)) => Ok(Some(PbkdfParameters::new(iterations, &salt)?)),
@@ -784,9 +774,13 @@ impl<'a> Fields<'a> {
         Ok(Self { reader, depth: 1 })
     }
 
-    /// The next member, or `None` at the end of the structure.
+    /// The next member, or `None` at the end of the structure this cursor is reading.
+    ///
+    /// "The structure this cursor is reading" is the load-bearing part: [`Fields::nested`]
+    /// moves it one level down, and without that a decoder for a nested structure would run
+    /// past its own end-of-container and carry on consuming the *parent's* remaining
+    /// members as though they were its own.
     pub(crate) fn next(&mut self) -> Result<Option<(u8, crate::tlv::Element<'a>)>> {
-        let before = self.reader.depth();
         let Some(element) = self.reader.next_element()? else {
             return Ok(None);
         };
@@ -796,13 +790,26 @@ impl<'a> Fields<'a> {
             }
             return self.next();
         }
-        let _ = before;
         let Some(tag) = element.tag.context() else {
             // A member of a Matter structure always has a context tag; the reader has
             // already refused an anonymous one.
             bail!(TlvInvalidTag)
         };
         Ok(Some((tag, element)))
+    }
+
+    /// Reads a nested structure's members, stopping at *its* end rather than the parent's.
+    ///
+    /// The caller has just taken the element that opens the nested container, so the reader
+    /// is one level deeper than this cursor thinks it is. `f` runs with the cursor moved to
+    /// match, and the level is restored afterwards whether `f` succeeded or not — a scoped
+    /// pair, because an `enter`/`leave` a caller could mismatch is the bug this exists to
+    /// prevent.
+    pub(crate) fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.depth = self.depth.saturating_add(1);
+        let out = f(self);
+        self.depth = self.depth.saturating_sub(1);
+        out
     }
 
     /// Skips a member's value, including a whole container.
@@ -881,11 +888,9 @@ mod tests {
                 initiator_session_id: SessionId(1),
                 passcode_id: PASSCODE_ID_COMMISSIONING,
                 has_pbkdf_parameters: false,
-                session_params: Some(SessionParams {
-                    idle_interval_ms: Some(500),
-                    active_interval_ms: Some(300),
-                    active_threshold_ms: Some(4_000),
-                }),
+                session_params: Some(SessionParams::announce(
+                    &crate::exchange::MrpParams::default(),
+                )),
             },
             |v, b| v.encode(b),
             PbkdfParamRequest::decode,
@@ -1104,9 +1109,10 @@ mod tests {
         // These decide how long this node waits before retransmitting, and they come from
         // a stranger.
         let hostile = SessionParams {
-            idle_interval_ms: Some(u32::MAX),
-            active_interval_ms: Some(u32::MAX),
-            active_threshold_ms: Some(u16::MAX),
+            idle_interval_ms: u32::MAX,
+            active_interval_ms: u32::MAX,
+            active_threshold_ms: u16::MAX,
+            ..SessionParams::legacy_peer()
         };
         let mrp = hostile.to_mrp();
         assert_eq!(mrp.idle_interval.as_millis(), 3_600_000);
@@ -1116,7 +1122,86 @@ mod tests {
 
     #[test]
     fn absent_session_params_take_the_defaults() {
-        let mrp = SessionParams::default().to_mrp();
-        assert_eq!(mrp, crate::exchange::MrpParams::default());
+        // A peer that sends nothing is a peer at Table 23's defaults, which are exactly the
+        // MRP defaults — and, for the revisions, the 1.0-era floors rather than this node's.
+        let peer = SessionParams::legacy_peer();
+        assert_eq!(peer.to_mrp(), crate::exchange::MrpParams::default());
+        assert_eq!(peer.data_model_revision, 16);
+        assert_eq!(peer.interaction_model_revision, 10);
+        assert_eq!(peer.max_paths_per_invoke, 1);
+        assert!(peer.supported_transports.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod nesting_tests {
+    use super::*;
+    use crate::sc::SessionParams;
+
+    #[test]
+    fn a_pbkdf_param_response_keeps_the_session_params_after_its_nested_parameter_set() {
+        // `pbkdf_parameters` is tag 4 and `responderSessionParams` is tag 5, so the nested
+        // decode has to stop at its own end-of-container. Without that the responder's MRP
+        // announcement is eaten and both ends silently fall back to the default timings —
+        // a wrong retransmission schedule, with no error raised anywhere.
+        let parameters = PbkdfParameters::new(1_000, b"SPAKE2P Key Salt").expect("parameters");
+        let response = PbkdfParamResponse {
+            initiator_random: [1; RANDOM_LEN],
+            responder_random: [2; RANDOM_LEN],
+            responder_session_id: SessionId(0x4321),
+            pbkdf_parameters: Some(parameters.clone()),
+            session_params: Some(SessionParams {
+                idle_interval_ms: 1234,
+                active_interval_ms: 567,
+                active_threshold_ms: 8901,
+                ..SessionParams::legacy_peer()
+            }),
+        };
+
+        let mut buf = [0u8; 256];
+        let len = response.encode(&mut buf).expect("encode");
+        let mut round = [0u8; 256];
+        round[..len].copy_from_slice(buf.get(..len).expect("in range"));
+        let decoded =
+            PbkdfParamResponse::decode(round.get(..len).expect("in range")).expect("decode");
+
+        assert_eq!(decoded.pbkdf_parameters, response.pbkdf_parameters);
+        assert_eq!(
+            decoded.session_params, response.session_params,
+            "the session params come after a nested structure"
+        );
+        assert_eq!(decoded.responder_session_id, SessionId(0x4321));
+    }
+
+    #[test]
+    fn a_duplicate_tag_inside_the_parameter_set_is_refused() {
+        // §A.5.1 applies to a nested structure as much as to the outer one.
+        let mut buf = [0u8; 256];
+        let mut w = TlvWriter::new(&mut buf);
+        w.start_structure(Tag::Anonymous).expect("start");
+        w.octets(Tag::Context(1), &[1u8; RANDOM_LEN])
+            .expect("random");
+        w.octets(Tag::Context(2), &[2u8; RANDOM_LEN])
+            .expect("random");
+        w.unsigned(Tag::Context(3), 1).expect("session id");
+        w.start_structure(Tag::Context(4)).expect("parameters");
+        w.unsigned(Tag::Context(1), 1_000).expect("iterations");
+        w.unsigned(Tag::Context(1), 2_000)
+            .expect("a second iterations");
+        w.octets(Tag::Context(2), b"SPAKE2P Key Salt")
+            .expect("salt");
+        w.end_container().expect("end parameters");
+        w.end_container().expect("end");
+        let len = w.finish().expect("finish").len();
+
+        let mut round = [0u8; 256];
+        round[..len].copy_from_slice(buf.get(..len).expect("in range"));
+        assert_eq!(
+            PbkdfParamResponse::decode(round.get(..len).expect("in range"))
+                .map(|_| ())
+                .unwrap_err()
+                .code(),
+            ErrorCode::TlvDuplicateTag
+        );
     }
 }

@@ -35,10 +35,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-hack
-      # Features are additive by design (concepts/ARCHITECTURE.md). A combination that
-      # fails to build is a feature that is not, and the only way to find out is to try
-      # them all.
-      - run: cargo hack check --feature-powerset --no-dev-deps
+      # Features are additive by design. A combination that fails to build is a feature that
+      # is not, and the only way to find out is to try them all.
+      # `log` and `defmt` are mutually exclusive in practice (see the manifest), so pairing
+      # them would double every other combination for a pair no device ships.
+      #
+      # Deliberately *without* `--no-dev-deps`. That flag rewrites `Cargo.toml` in place for
+      # the duration of the run and restores it on exit — so an interrupted run (a timeout, a
+      # cancelled job, a Ctrl-C on a developer's machine) leaves a manifest with no
+      # `[dev-dependencies]`, and every later `cargo test` fails with "unresolved import
+      # `hex_literal`" in code nobody touched. It buys nothing here: `check` without
+      # `--all-targets` does not build dev-dependencies, and the two this crate has — `hex`
+      # and `hex-literal` — do not depend on `matter-kit`, so they cannot unify a feature
+      # into the crate under test.
+      - run: cargo hack check --feature-powerset --mutually-exclusive-features log,defmt
 
   embedded:
     name: no_std targets
@@ -68,7 +78,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --features std --all-targets
-      - run: cargo clippy --no-default-features
+      - run: cargo clippy --no-default-features --all-targets
       - run: cargo doc --features std --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
@@ -81,7 +91,7 @@ jobs:
       # Kept in step with `rust-version` in Cargo.toml. A bump is a deliberate act.
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --features std
+      - run: cargo check --all-features
 
   fuzz:
     name: Fuzz
@@ -94,11 +104,91 @@ jobs:
       # A minute each on a pull request, to catch a regression that a new corpus entry
       # would find immediately. The nightly schedule is where they get real time.
       - run: |
-          for target in tlv tlv_roundtrip message pase; do
+          for target in tlv tlv_roundtrip message pase cert case attestation x509 im dm dispatch clusters discovery subscribe chunking acl messaging btp checkin persist conformance scenes energy bdx tcp group ntl; do
             cargo fuzz run "$target" -- \
               -max_total_time=${{ github.event_name == 'schedule' && 600 || 60 }} \
               -rss_limit_mb=4096
           done
+
+  interop:
+    name: Interop (rs-matter)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Rule 1: a test suite that only ever meets itself measures agreement, not correctness.
+      # Everything under `tests/` is this crate checking its own reading of the specification;
+      # the golden vectors check it against the CSA's published numbers; this checks it against
+      # a *different implementation's* reading of the same sentences.
+      #
+      # `interop/` is its own workspace, so `rs-matter`'s 217 crates never enter this crate's
+      # dependency graph, its feature powerset or its MSRV. That is also why this is a separate
+      # job rather than another step in `test`.
+      - run: cargo test --manifest-path interop/Cargo.toml
+      - run: cargo fmt --manifest-path interop/Cargo.toml --check
+      - run: cargo clippy --manifest-path interop/Cargo.toml --all-targets
+
+  chip:
+    name: Interop (CHIP SDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The only test in the repository that meets the *reference* implementation: `chip-tool`
+      # is the controller every certified Matter product is commissioned by during
+      # certification, and a disagreement with it is a device that cannot be paired.
+      #
+      # It needs no hardware: both ends run in containers on an IPv6 Docker network. The run
+      # covers the whole of §5.5 — PASE, attestation verified rather than bypassed, the CSR
+      # and AddNOC, then mDNS resolution, CASE on the identity just issued, and
+      # CommissioningComplete over the operational session.
+      #
+      # Reaching a passing run took five defects that nothing else in this repository could
+      # see, because everything else has matter-kit on both ends. The image is 1.6-era and
+      # also carries the SDK's 603 Python certification scripts, which `python.sh` runs.
+      - run: ./interop/chip/run.sh
+
+  harness:
+    name: Interop (Test Harness cases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The CSA Test Harness's own certification cases, out of the same image: 603 `TC_*.py`
+      # scripts, the `matter` package they import, and the PICS files. Each one commissions the
+      # device itself, so §5.5 runs in full before the first assertion.
+      #
+      # Only the cases known to pass are listed, and a case is added here when it passes —
+      # that is how a milestone's exit criterion is actually met. `python.sh --list` enumerates
+      # the rest. A skip exits non-zero, so a case that stops running cannot stay on this list.
+      - run: |
+          ./interop/chip/python.sh \
+            TC_CGEN_2_1 TC_OPCREDS_3_1 \
+            TC_ACL_2_2 TC_ACL_2_4 TC_ACL_2_6 TC_ACL_2_10 \
+            TC_IDM_1_2 TC_IDM_1_4 TC_IDM_2_2 TC_IDM_2_3 TC_IDM_4_2
+
+  generated:
+    name: Generated sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The CSA data model is not vendored here — every file carries the CSA's own copyright
+      # notice and is not redistributable — so the gate fetches it, shallowly, from the
+      # project that publishes it.
+      - name: Fetch the CSA data model
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse \
+            https://github.com/project-chip/connectedhomeip.git /tmp/chip
+          git -C /tmp/chip sparse-checkout set data_model/1.6
+      # Regenerating and diffing is what stops `src/clusters/generated/` drifting from the
+      # specification it claims to be. A cluster revision that moved upstream fails here
+      # rather than at a certification lab.
+      - run: cargo xtask check --dm /tmp/chip/data_model/1.6
 
   deny:
     name: Licenses and advisories

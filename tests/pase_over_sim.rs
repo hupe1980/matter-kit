@@ -56,9 +56,10 @@ fn setup(device_passcode: u32, commissioner_passcode: u32, share_parameters: boo
             verifier,
             parameters: parameters.clone(),
             session_params: Some(SessionParams {
-                idle_interval_ms: Some(500),
-                active_interval_ms: Some(300),
-                active_threshold_ms: Some(4_000),
+                idle_interval_ms: 500,
+                active_interval_ms: 300,
+                active_threshold_ms: 4_000,
+                ..SessionParams::legacy_peer()
             }),
         },
         SessionId(0x1001),

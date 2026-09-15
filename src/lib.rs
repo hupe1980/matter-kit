@@ -9,25 +9,13 @@
 //!
 //! # Status
 //!
-//! Under construction and pre-1.0. A commissioner and a device can now turn a printed
-//! passcode into an encrypted session — the whole of PASE — but there is no data model and
-//! no clusters yet, so there is nothing to *say* over that session.
-//!
-//! | Layer | Module | Specification | State |
-//! |---|---|---|---|
-//! | Wire format | [`tlv`] | Core Appendix A | ✅ |
-//! | Message frame, counters, replay | [`msg`] | Core §4.4, §4.6 | ✅ |
-//! | Message security and privacy | [`msg::protect`] | Core §4.8, §4.9 | ✅ |
-//! | Exchanges, MRP | [`exchange`] | Core §4.10, §4.12 | ✅ |
-//! | Cryptosuite, SPAKE2+, key custody | [`crypto`] | Core ch. 3 | ✅ |
-//! | PASE, StatusReport | [`sc`] | Core §4.11, §4.14.1 | ✅ |
-//! | Secure sessions | [`session`] | Core §4.13 | ✅ |
-//! | Platform seams | [`platform`] | — | ✅ |
-//! | Sizing | [`Config`] | Core §2.11 | ✅ |
-//! | CASE | `sc::case` | Core §4.14.2 | 📐 |
-//! | Commissioning, certificates, fabrics | `commissioning`, `cert`, `fabric` | Core ch. 5–6 | 📐 |
-//! | Data and interaction models | `dm`, `im` | Core ch. 7–10 | 📐 |
-//! | Clusters, device types | `clusters` | Application Cluster, Device Library | 📐 |
+//! Under construction and pre-1.0. A device can be commissioned into a fabric end to end,
+//! answer Reads, Writes and Invokes against a `const` data model, hold subscriptions,
+//! enforce §6.6's access control, and advertise itself over DNS-SD — with
+//! [`messaging`] composing the layers, so a datagram finds its session, exchange and
+//! protocol. What is missing is the application clusters. The
+//! [README](https://github.com/hupe1980/matter-kit#status) carries the layer-by-layer table;
+//! each module here states which sections it implements.
 //!
 //! # Three things that shape the whole crate
 //!
@@ -65,7 +53,12 @@
 //!
 //! # Commissioning, in miniature
 //!
+//! The whole of PASE: a printed passcode becomes three shared keys, without the passcode
+//! ever crossing the wire. Needs the `rustcrypto` feature, which is on by default.
+//!
 //! ```
+//! # #[cfg(feature = "rustcrypto")]
+//! # fn demo() -> Result<(), matter_kit::Error> {
 //! use matter_kit::crypto::Spake2pVerifierData;
 //! use matter_kit::msg::SessionId;
 //! use matter_kit::sc::{PaseInitiator, PaseResponder, PbkdfParameters, ResponderConfig};
@@ -93,20 +86,12 @@
 //!
 //! // Both ends now hold the same three keys.
 //! assert_eq!(commissioner_keys.i2r, device_keys.i2r);
-//! # Ok::<(), matter_kit::Error>(())
-//! ```
-//!
-//! # Reading a payload
-//!
-//! ```
-//! use matter_kit::tlv::{Pretty, TlvReader};
-//!
-//! // { 0 = 42, 1 = -17 } — the example from Core Table 128.
-//! let bytes = [0x15, 0x20, 0x00, 0x2a, 0x20, 0x01, 0xef, 0x18];
-//! TlvReader::validate(&bytes)?;
-//! # #[cfg(feature = "std")]
-//! assert_eq!(std::format!("{}", Pretty(&bytes)), "{0 = 42, 1 = -17}");
-//! # Ok::<(), matter_kit::Error>(())
+//! # Ok(())
+//! # }
+//! # fn main() {
+//! #     #[cfg(feature = "rustcrypto")]
+//! #     demo().expect("the exchange completes");
+//! # }
 //! ```
 //!
 //! # Matching on an event
@@ -142,17 +127,51 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
+mod bytes;
+
+pub mod acl;
+#[cfg(feature = "rustcrypto")]
+pub mod attestation;
+pub mod bdx;
+/// The fabric's certificate authority needs [`cert`] and [`crypto`]'s signing.
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod ca;
+#[cfg(feature = "rustcrypto")]
+pub mod cert;
+pub mod clusters;
+pub mod commissioning;
 pub mod config;
 pub mod crypto;
+#[cfg(feature = "rustcrypto")]
+pub mod der;
+pub mod discovery;
+pub mod dm;
 pub mod error;
 pub mod exchange;
+#[cfg(feature = "rustcrypto")]
+pub mod fabric;
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod group;
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod icd;
+pub mod im;
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod jf;
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod messaging;
 pub mod msg;
 pub mod platform;
-#[cfg(feature = "rustcrypto")]
 pub mod sc;
 #[cfg(feature = "rustcrypto")]
 pub mod session;
+pub mod sync;
 pub mod tlv;
+pub mod transport;
 
 pub use config::{Config, DefaultConfig};
 pub use error::{Error, ErrorCode, Result};
@@ -164,8 +183,31 @@ pub use error::{Error, ErrorCode, Result};
 /// 1.6.0. A larger value is newer.
 pub const SPECIFICATION_VERSION: u32 = 0x0106_0000;
 
+/// The Data Model revision this crate implements — §7.1.1's revision 21, "Added Revision
+/// conformance".
+///
+/// §11.1.5.1 requires a node to report "the revision number of the Data Model against which
+/// the Node is certified", and "one of the valid values listed in Section 7.1.1". The table
+/// grew by one between releases and the split is easy to miss: 1.5.1 ends at
+/// `20 — Removed P quality and added Revision conformance`, and 1.6 divides that single row
+/// into `20 — Removed P quality` and `21 — Added Revision conformance`. A 1.6 node reports
+/// 21; carrying 20 forward advertises a 1.5.1 data model.
+///
+/// It lives here rather than in the Basic Information cluster because it is also
+/// `DATA_MODEL_REVISION` in the `session-parameter-struct` of §4.13.1, which is exchanged
+/// long before any cluster is readable. `clusters::basic_information` re-exports it.
+pub const DATA_MODEL_REVISION: u16 = 21;
+
 /// The IANA-assigned UDP port for Matter (Core §2.5.6.3).
 pub const PORT: u16 = 5540;
+
+/// The README's `rust` blocks, compiled as doctests.
+///
+/// Under `cfg(doctest)` only, so the README is not pulled into the crate's own
+/// documentation — this exists so a landing-page example cannot quietly stop compiling.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct Readme;
 
 #[cfg(test)]
 mod tests {
@@ -174,5 +216,20 @@ mod tests {
     #[test]
     fn specification_version_is_1_6_0() {
         assert_eq!(SPECIFICATION_VERSION.to_be_bytes(), [1, 6, 0, 0]);
+    }
+
+    /// The three revisions a peer reads out of `session-parameter-struct` (§4.13.1) move
+    /// independently of each other and of the crate version, and each is a number taken from
+    /// a table in a PDF. Asserting them here is what makes a spec uplift that forgets one
+    /// fail loudly: 1.6 split §7.1.1's last row and `DATA_MODEL_REVISION` silently stayed at
+    /// its 1.5.1 value until this test existed.
+    #[test]
+    fn the_revision_constants_are_the_1_6_values() {
+        // Core §7.1.1, last row: "21 — Added Revision conformance".
+        assert_eq!(DATA_MODEL_REVISION, 21);
+        // Core §8.1.1, last row: "13 — Added WildcardFilterConfigurationVersion (Matter 1.3)".
+        assert_eq!(crate::im::INTERACTION_MODEL_REVISION, 13);
+        // Core §11.1.5.22, as four component bytes.
+        assert_eq!(SPECIFICATION_VERSION, 0x0106_0000);
     }
 }

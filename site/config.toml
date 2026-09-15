@@ -1,0 +1,45 @@
+# https://www.getzola.org/documentation/getting-started/configuration/
+base_url = "https://hupe1980.github.io/matter-kit"
+title = "matter-kit"
+description = "A Matter 1.6 protocol implementation in Rust: one crate, no_std, no allocation, and no runtime of its own."
+default_language = "en"
+author = "hupe1980"
+
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+
+taxonomies = []
+
+[markdown]
+smart_punctuation = true
+insert_anchor_links = "heading"
+
+[markdown.highlighting]
+# `class` emits CSS classes rather than inline colours, so highlighting follows the page's
+# light/dark mode instead of being baked into the HTML.
+style = "class"
+light_theme = "github-light"
+dark_theme = "Nord"
+add_color_scheme = true
+
+
+[search]
+index_format = "elasticlunr_json"
+
+[extra]
+repo = "https://github.com/hupe1980/matter-kit"
+docs_rs = "https://docs.rs/matter-kit"
+crates_io = "https://crates.io/crates/matter-kit"
+spec_version = "1.6"
+# Used for og:image and twitter:image; a static file under `static/`.
+og_image = "og.png"
+
+[extra.nav]
+items = [
+    { name = "Documentation", url = "@/docs/_index.md" },
+    { name = "Status", url = "@/docs/status.md" },
+    { name = "API (docs.rs)", url = "https://docs.rs/matter-kit", external = true },
+    { name = "GitHub", url = "https://github.com/hupe1980/matter-kit", external = true },
+]

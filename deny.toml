@@ -1,7 +1,9 @@
 # `cargo deny` configuration.
 #
-# The dependency tree is deliberately tiny — `heapless` and `bitflags`, plus optional
-# logging — so this is less about triage and more about noticing the day that changes.
+# The dependency tree is deliberately small: `heapless` and `bitflags` always, `subtle` and
+# `zeroize` because constant-time comparison and key wiping are not optional, the RustCrypto
+# set behind the `rustcrypto` feature, and `socket2` behind `std` for one socket option. So
+# this is less about triage and more about noticing the day that changes.
 
 [advisories]
 version = 2
@@ -10,6 +12,11 @@ yanked = "deny"
 [licenses]
 version = 2
 # Everything in the tree must be usable by a consumer who ships a commercial device.
+#
+# This is a *policy* — the licences a dependency may carry — not an inventory of what the tree
+# happens to contain today. So an entry nothing currently uses is expected rather than stale,
+# and trimming the list to today's dependencies would turn every future addition into a CI
+# failure that says "unknown licence" when the real answer was decided here long ago.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -20,6 +27,7 @@ allow = [
     "Unicode-3.0",
     "Zlib",
 ]
+unused-allowed-license = "allow"
 confidence-threshold = 0.93
 
 [bans]

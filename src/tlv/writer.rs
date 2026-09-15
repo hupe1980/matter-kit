@@ -15,6 +15,18 @@ use super::reader::MAX_DEPTH;
 use super::types::{ContainerKind, ElementType, Tag, Width, write_le};
 use crate::error::{Error, ErrorCode, Result, bail};
 
+/// A position in a [`TlvWriter`], taken by [`TlvWriter::checkpoint`].
+///
+/// Opaque and `Copy`: it is the writer's whole state minus the buffer, which is sixteen
+/// container kinds and three scalars, so keeping one per chunk boundary costs nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Checkpoint {
+    pos: usize,
+    stack: [ContainerKind; MAX_DEPTH],
+    depth: usize,
+    top_level_done: bool,
+}
+
 /// Builds a TLV encoding in a borrowed buffer.
 #[derive(Debug)]
 pub struct TlvWriter<'a> {
@@ -23,6 +35,9 @@ pub struct TlvWriter<'a> {
     stack: [ContainerKind; MAX_DEPTH],
     depth: usize,
     top_level_done: bool,
+    /// Whether [`TlvWriter::new_in`] made this cursor start inside a container, so that
+    /// `finish` knows which depth means "done".
+    started_inside: bool,
 }
 
 impl<'a> TlvWriter<'a> {
@@ -35,6 +50,42 @@ impl<'a> TlvWriter<'a> {
             stack: [ContainerKind::Structure; MAX_DEPTH],
             depth: 0,
             top_level_done: false,
+            started_inside: false,
+        }
+    }
+
+    /// Starts writing as though the cursor were already inside `container`.
+    ///
+    /// Which tag forms are legal depends on where an element sits (§A.5.1, §A.5.2), so a
+    /// fragment that will be spliced into a structure has to be *written* against a
+    /// structure's rules as well as read against them: a context-specific tag is illegal at
+    /// the top level and required inside a structure, so building such a fragment with
+    /// [`TlvWriter::new`] refuses exactly the bytes that are correct.
+    ///
+    /// This is the counterpart of [`TlvReader::new_in`](super::TlvReader::new_in), and what
+    /// produces the payloads [`TlvWriter::raw_element`] consumes — an attribute's value, a
+    /// command's fields: anything whose schema belongs to a cluster rather than to the layer
+    /// carrying it.
+    ///
+    /// ```
+    /// use matter_kit::tlv::{ContainerKind, Tag, TlvWriter};
+    ///
+    /// // An attribute value destined for an AttributeDataIB's context-2 slot.
+    /// let mut buf = [0u8; 16];
+    /// let mut w = TlvWriter::new_in(&mut buf, ContainerKind::Structure);
+    /// w.unsigned(Tag::Context(2), 42)?;
+    /// assert_eq!(w.finish()?, &[0x24, 0x02, 0x2A]);
+    /// # Ok::<(), matter_kit::Error>(())
+    /// ```
+    #[must_use]
+    pub fn new_in(buf: &'a mut [u8], container: ContainerKind) -> Self {
+        Self {
+            buf,
+            pos: 0,
+            stack: [container; MAX_DEPTH],
+            depth: 1,
+            top_level_done: false,
+            started_inside: true,
         }
     }
 
@@ -64,13 +115,77 @@ impl<'a> TlvWriter<'a> {
         self.buf.get(..self.pos).unwrap_or(&[])
     }
 
+    /// Records the writer's position so a failed write can be undone.
+    ///
+    /// This is what makes size-driven chunking possible (Core §10.2.3). "Chunking entails
+    /// maximally packing these information blocks into a series of 'data' messages", and
+    /// the only way to know whether one more block fits is to try: a writer that runs out
+    /// of room leaves "the buffer's contents unspecified", which would corrupt the message
+    /// already packed into it. Taking a checkpoint before a block and rolling back when it
+    /// does not fit turns that into a clean boundary.
+    ///
+    /// ```
+    /// use matter_kit::tlv::{Tag, TlvWriter};
+    ///
+    /// let mut buf = [0u8; 8];
+    /// let mut w = TlvWriter::new(&mut buf);
+    /// w.start_array(Tag::Anonymous)?;
+    /// let cp = w.checkpoint();
+    /// // Far too big for what is left; the buffer is now unspecified past `cp`.
+    /// assert!(w.octets(Tag::Anonymous, &[0; 32]).is_err());
+    /// w.rollback(&cp);
+    /// // ...and the array is intact, so it can still be closed and sent.
+    /// w.end_container()?;
+    /// assert_eq!(w.finish()?, &[0x16, 0x18]);
+    /// # Ok::<(), matter_kit::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            pos: self.pos,
+            stack: self.stack,
+            depth: self.depth,
+            top_level_done: self.top_level_done,
+        }
+    }
+
+    /// Restores a position taken by [`TlvWriter::checkpoint`], discarding everything
+    /// written since.
+    ///
+    /// The octets past the restored position keep whatever a failed write left in them;
+    /// they are simply no longer part of the encoding, because [`TlvWriter::written`] and
+    /// [`TlvWriter::finish`] both stop at `pos`.
+    pub const fn rollback(&mut self, checkpoint: &Checkpoint) {
+        self.pos = checkpoint.pos;
+        self.stack = checkpoint.stack;
+        self.depth = checkpoint.depth;
+        self.top_level_done = checkpoint.top_level_done;
+    }
+
+    /// How many octets are still free.
+    ///
+    /// A lower bound on what will fit: every element also costs a control octet and a tag,
+    /// so this answers "is it even worth trying?" rather than "will this value fit?".
+    #[must_use]
+    pub const fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
+
     /// Checks the encoding is complete — one top-level element, every container closed —
     /// and returns it.
     pub fn finish(self) -> Result<&'a [u8]> {
-        if self.depth != 0 {
+        let base = usize::from(self.started_inside);
+        if self.depth != base {
             bail!(TlvContainerMismatch)
         }
-        if !self.top_level_done {
+        // A top-level encoding is one element (§A.1); a fragment written with
+        // [`TlvWriter::new_in`] is one member of a container, so "done" means something was
+        // written rather than that the single top-level element completed.
+        if self.started_inside {
+            if self.pos == 0 {
+                bail!(InvalidState)
+            }
+        } else if !self.top_level_done {
             bail!(InvalidState)
         }
         self.buf
@@ -210,6 +325,30 @@ impl<'a> TlvWriter<'a> {
         self.string(tag, value, false)
     }
 
+    /// Writes an octet string of `len` copies of one byte, without a source buffer.
+    ///
+    /// A TLV octet string states its length before its content, so a caller that wants a
+    /// large uniform value would otherwise need a buffer of that size to copy *from* — which
+    /// on a device means a second copy of something already in the output buffer. §11.12.7.4's
+    /// `PayloadTestRequest` asks for up to 2048 such octets, and it exists precisely to find
+    /// the size at which a device runs out of room, so materialising them twice would move
+    /// the answer.
+    pub fn octets_fill(&mut self, tag: Tag, len: usize, byte: u8) -> Result<()> {
+        let length = len as u64;
+        let w = Width::for_unsigned(length);
+        self.head(tag, ElementType::Octets(w))?;
+        let n = w.octets();
+        let slot = self.room(n)?;
+        write_le(slot, length, n)?;
+        self.advance(n)?;
+        let dst = self.room(len)?;
+        let Some(dst) = dst.get_mut(..len) else {
+            bail!(BufferTooSmall)
+        };
+        dst.fill(byte);
+        self.advance(len)
+    }
+
     fn string(&mut self, tag: Tag, value: &[u8], utf8: bool) -> Result<()> {
         let len = value.len() as u64;
         let w = Width::for_unsigned(len);
@@ -278,6 +417,71 @@ impl<'a> TlvWriter<'a> {
         *b = 0x18;
         self.advance(1)?;
         self.depth = new_depth;
+        if self.depth == 0 {
+            self.top_level_done = true;
+        }
+        Ok(())
+    }
+
+    /// Copies an already-encoded element in, replacing its tag.
+    ///
+    /// An element's tag is the only part of it that depends on where it sits, so moving one
+    /// between containers means re-tagging it: a member of an array is anonymous, and the
+    /// same value as a member of a structure needs a context tag. Core §10.6.4.3.1's list
+    /// chunking does exactly this — each item of a list is lifted out of the array and sent
+    /// as its own `Data` field — and doing it by re-encoding would mean a second buffer as
+    /// large as the value.
+    ///
+    /// Only the control octet and tag are rewritten; the value is copied verbatim, so this
+    /// costs nothing beyond the copy `raw_element` already does.
+    pub fn raw_element_retagged(&mut self, bytes: &[u8], tag: Tag) -> Result<()> {
+        use super::reader::TlvReader;
+        // Validated against the container it *came* from — an anonymous member of an array
+        // is well-formed there and would be rejected against a structure's rules.
+        let mut r = TlvReader::new_in(bytes, ContainerKind::List);
+        let Some(first) = r.next_element()? else {
+            bail!(InvalidArgument)
+        };
+        if first.value.container().is_some() {
+            r.skip_container()?;
+        }
+        r.finish()?;
+
+        let Some(&control) = bytes.first() else {
+            bail!(InvalidArgument)
+        };
+        // The element type is the low five bits; the old tag's width is fixed by the top
+        // three, so the value starts at a known offset.
+        let old_tag_len = first.tag.encoded_len();
+        let value_start = old_tag_len
+            .checked_add(1)
+            .ok_or(Error::new(ErrorCode::InvalidArgument))?;
+        let Some(value) = bytes.get(value_start..) else {
+            bail!(InvalidArgument)
+        };
+
+        self.check_tag(tag)?;
+        let new_tag_len = tag.encoded_len();
+        let head = new_tag_len
+            .checked_add(1)
+            .ok_or(Error::new(ErrorCode::BufferTooSmall))?;
+        let total = head
+            .checked_add(value.len())
+            .ok_or(Error::new(ErrorCode::BufferTooSmall))?;
+        let slot = self.room(total)?;
+        let Some(first_byte) = slot.first_mut() else {
+            bail!(BufferTooSmall)
+        };
+        *first_byte = tag.control_bits() | (control & 0x1F);
+        let Some(rest) = slot.get_mut(1..) else {
+            bail!(BufferTooSmall)
+        };
+        tag.encode(rest)?;
+        let Some(dst) = slot.get_mut(head..total) else {
+            bail!(BufferTooSmall)
+        };
+        dst.copy_from_slice(value);
+        self.advance(total)?;
         if self.depth == 0 {
             self.top_level_done = true;
         }

@@ -11,7 +11,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-matter-kit = { path = ".." }
+# `nfc` and `paf` gate two transports; the fuzzers want them, and a fuzz build is never a
+# device build, so turning them on here costs a device nothing.
+matter-kit = { path = "..", features = ["nfc", "paf", "provisional"] }
 
 [[bin]]
 name = "tlv"
@@ -35,11 +37,172 @@ doc = false
 bench = false
 
 [[bin]]
+name = "dm"
+path = "fuzz_targets/dm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "im"
+path = "fuzz_targets/im.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attestation"
+path = "fuzz_targets/attestation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "x509"
+path = "fuzz_targets/x509.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "case"
+path = "fuzz_targets/case.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cert"
+path = "fuzz_targets/cert.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "message"
 path = "fuzz_targets/message.rs"
 test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "clusters"
+path = "fuzz_targets/clusters.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "discovery"
+path = "fuzz_targets/discovery.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "subscribe"
+path = "fuzz_targets/subscribe.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunking"
+path = "fuzz_targets/chunking.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "acl"
+path = "fuzz_targets/acl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "messaging"
+path = "fuzz_targets/messaging.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "btp"
+path = "fuzz_targets/btp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "checkin"
+path = "fuzz_targets/checkin.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "persist"
+path = "fuzz_targets/persist.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "conformance"
+path = "fuzz_targets/conformance.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
+
+[[bin]]
+name = "scenes"
+path = "fuzz_targets/scenes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "energy"
+path = "fuzz_targets/energy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bdx"
+path = "fuzz_targets/bdx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tcp"
+path = "fuzz_targets/tcp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "group"
+path = "fuzz_targets/group.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ntl"
+path = "fuzz_targets/ntl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dispatch"
+path = "fuzz_targets/dispatch.rs"
+test = false
+doc = false
+bench = false
