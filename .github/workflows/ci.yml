@@ -96,11 +96,32 @@ jobs:
   fuzz:
     name: Fuzz
     runs-on: ubuntu-latest
+    # `-D warnings` is right for every other job and wrong for this one. `cargo fuzz` builds
+    # with its own sanitizer and coverage `RUSTFLAGS`, appended to whatever is already in the
+    # environment, and it compiles `libfuzzer-sys` and its dependencies as well as this crate —
+    # so one warning in somebody else's code fails the build, and the same code is already
+    # linted without warnings by the Test and Lint jobs.
+    env:
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
+      # `llvm-tools-preview` is what the sanitizer runtimes and `cargo fuzz coverage` link
+      # against; nightly alone leaves `cargo fuzz build` to fail later and less clearly.
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      # `fuzz/` is a workspace of its own (see its Cargo.toml), so the default cache — which
+      # keys on the workspace at the repository root — caches nothing this job builds.
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@cargo-fuzz
+        with:
+          workspaces: fuzz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # The install is a separate step from the run, so a tool that did not land is reported
+      # as a tool that did not land, rather than as `error: no such command: fuzz` from inside
+      # a twenty-seven-iteration loop.
+      - run: cargo fuzz --version
       # A minute each on a pull request, to catch a regression that a new corpus entry
       # would find immediately. The nightly schedule is where they get real time.
       - run: |
