@@ -1,0 +1,127 @@
+name: Release
+
+# A tag is the trigger, because publishing is irreversible: crates.io lets a version be
+# yanked but never deleted or replaced, and a version number is spent the moment it uploads.
+# Pushing `v0.1.0` is therefore the deliberate act, and nothing on `main` can cause one.
+#
+# `workflow_dispatch` is here for the dry run: it packages, verifies and builds the release
+# notes without publishing anything, so the first real tag is not also the first rehearsal.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The tag says what is being released; `Cargo.toml` says what would be uploaded. If they
+  # disagree, the tag is a lie about a version that cannot be taken back — so this runs
+  # first, costs seconds, and stops everything else.
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        run: |
+          set -euo pipefail
+          manifest="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          echo "version=$manifest" >>"$GITHUB_OUTPUT"
+          echo "Cargo.toml: $manifest"
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "Dispatch run — nothing is published; packaging $manifest as a rehearsal."
+            exit 0
+          fi
+          tag="${GITHUB_REF#refs/tags/v}"
+          echo "tag:        $tag"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $manifest"
+            exit 1
+          fi
+
+  # The whole of CI, on the exact commit being released. `ci.yml` declares `workflow_call`
+  # for this: a release that re-lists the gates would be a second list to keep in step, and
+  # the one that drifts is always the one that runs less often.
+  gate:
+    name: CI
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+    # No `secrets: inherit`. CI needs none, and inheriting would hand the publish token to
+    # every job in it — including the ones that run somebody else's container.
+
+  # Everything up to the upload, so a packaging failure is found before the token is used.
+  # `--locked` because the lockfile is what every gate above ran against; letting the
+  # publish resolve afresh publishes something nothing tested.
+  package:
+    name: Package
+    needs: [verify, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --locked --dry-run
+      # What a reader will actually get. `cargo package --list` is the only place the
+      # `exclude` in Cargo.toml is visible, and a specification PDF shipped by accident is a
+      # licensing problem rather than a large download.
+      - run: cargo package --locked --list
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  publish:
+    name: Publish to crates.io
+    needs: [verify, gate, package]
+    # Only a tag publishes. A dispatch run stops here, having packaged and verified.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # A protected environment is where the token lives, so publishing can require a review
+    # and the secret is not readable by a workflow on a fork or a branch.
+    environment:
+      name: crates-io
+      url: https://crates.io/crates/matter-kit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release:
+    name: GitHub release
+    needs: [verify, publish]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: crate
+          path: dist
+      # Generated from the commits, not from a file: a changelog kept by hand is a second
+      # record of what happened, and the two disagree on the release where it matters.
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.crate
+          generate_release_notes: true
+          # A pre-1.0 version is a pre-release, and the marking is what keeps it out of
+          # "latest" for anyone who reads that as a recommendation.
+          prerelease: ${{ startsWith(needs.verify.outputs.version, '0.') }}
