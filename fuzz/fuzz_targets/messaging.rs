@@ -40,8 +40,7 @@ const EXCHANGES: usize = 8;
 
 type Stack = Messaging<DefaultConfig, SESSIONS, EXCHANGES>;
 
-const PEER_ADDR: PeerAddr =
-    PeerAddr::new([0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+const PEER_ADDR: PeerAddr = PeerAddr::new([0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 /// §4.12.4 makes MRP's behaviour depend on the transport, so a peer is where it is *reached*,
 /// not just an address.
 const PEER: matter_kit::platform::Peer = matter_kit::platform::Peer::Udp(PEER_ADDR);
@@ -106,9 +105,9 @@ fuzz_target!(|data: &[u8]| {
 
     // Whatever the input filled, §4.10.5.3's cleanup must give it back. Move the clock past
     // the idle timeout and drive the timers the way a node's event loop would.
-    let recovered = at(clock + 1).saturating_add(EXCHANGE_IDLE_TIMEOUT).saturating_add(
-        matter_kit::platform::Duration::from_secs(1),
-    );
+    let recovered = at(clock + 1)
+        .saturating_add(EXCHANGE_IDLE_TIMEOUT)
+        .saturating_add(matter_kit::platform::Duration::from_secs(1));
     let mut drains = 0usize;
     while node.poll(recovered, 0).is_some() {
         drains += 1;
@@ -134,7 +133,11 @@ fuzz_target!(|data: &[u8]| {
     let Some(sent) = out.get_mut(..len) else {
         return;
     };
-    match fresh.receive(sent, PEER, recovered.saturating_add(matter_kit::platform::Duration::from_millis(1))) {
+    match fresh.receive(
+        sent,
+        PEER,
+        recovered.saturating_add(matter_kit::platform::Duration::from_millis(1)),
+    ) {
         Ok(Received::Message { payload, .. }) => {
             assert_eq!(
                 payload, b"still alive",

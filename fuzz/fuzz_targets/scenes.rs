@@ -31,9 +31,7 @@ use core::cell::RefCell;
 
 use libfuzzer_sys::fuzz_target;
 use matter_kit::clusters::groups::{self, Groups, NeverIdentifying};
-use matter_kit::clusters::scenes::{
-    self, ExtensionFieldSetStruct, SceneHooks, SceneTable, Scenes,
-};
+use matter_kit::clusters::scenes::{self, ExtensionFieldSetStruct, SceneHooks, SceneTable, Scenes};
 use matter_kit::dm::spec::Optional;
 use matter_kit::dm::{ClusterDescriptor, Endpoint, Node, Privilege};
 use matter_kit::im::{

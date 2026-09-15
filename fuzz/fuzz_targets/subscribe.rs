@@ -26,8 +26,11 @@ use matter_kit::msg::{FabricIndex, SessionId};
 use matter_kit::platform::{Duration, Instant};
 use matter_kit::{Config, DefaultConfig};
 
-type Table =
-    SubscriptionTable<DefaultConfig, { DefaultConfig::SUBSCRIPTIONS }, { DefaultConfig::SUB_PATHS }>;
+type Table = SubscriptionTable<
+    DefaultConfig,
+    { DefaultConfig::SUBSCRIPTIONS },
+    { DefaultConfig::SUB_PATHS },
+>;
 
 fn at(seconds: u64) -> Instant {
     Instant::ZERO.saturating_add(Duration::from_secs(seconds))
@@ -87,9 +90,21 @@ fuzz_target!(|data: &[u8]| {
             },
             at(0),
         );
+        // Exhaustive on purpose, with no wildcard: a new `SubscribeError` variant should stop
+        // this compiling, so that whoever adds one decides here whether it is a refusal this
+        // input may legitimately produce.
         match outcome {
             Ok(id) => assert_ne!(id, 0, "zero is reserved"),
             Err(SubscribeError::NoPaths | SubscribeError::TooManyPaths | SubscribeError::Full) => {}
+            // Not reachable, and worth saying so rather than shrugging at. The table is fresh
+            // and this is its first subscription on fabric 1, while §2.11.2.2's floor of three
+            // per fabric is a compile-time assertion on every `Config` (`AssertValid`). Refusing
+            // here would mean the per-fabric accounting is charging a fabric for subscriptions
+            // it does not hold — which is a defect no status code on the wire would reveal,
+            // because `Full` and `FabricQuota` are both `RESOURCE_EXHAUSTED`.
+            Err(SubscribeError::FabricQuota) => {
+                panic!("the first subscription on a fabric exhausted that fabric's quota")
+            }
         }
     }
 

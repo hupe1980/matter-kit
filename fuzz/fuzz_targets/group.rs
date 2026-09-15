@@ -80,7 +80,14 @@ fuzz_target!(|data: &[u8]| {
             })
             .collect();
 
-        match wire::receive(&mut buf, FROM, &keys, &mut peers, |_| Some(COMPRESSED), &mut scratch) {
+        match wire::receive(
+            &mut buf,
+            FROM,
+            &keys,
+            &mut peers,
+            |_| Some(COMPRESSED),
+            &mut scratch,
+        ) {
             // Property 2: a message means the AEAD passed, which means a key matched.
             Ok(Received::Message(inbound)) => {
                 assert_eq!(inbound.context.fabric_index, F1);

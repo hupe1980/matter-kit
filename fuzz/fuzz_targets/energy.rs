@@ -208,9 +208,8 @@ impl DemHooks for Appliance {
 }
 
 const TARGETS_PER_DAY: usize = 4;
-const ALL_FEATURES: u32 = evse::feature::CHARGING_PREFERENCES
-    | evse::feature::V2_X
-    | evse::feature::SO_C_REPORTING;
+const ALL_FEATURES: u32 =
+    evse::feature::CHARGING_PREFERENCES | evse::feature::V2_X | evse::feature::SO_C_REPORTING;
 const DEM_FEATURES: u32 = dem::feature::POWER_ADJUSTMENT
     | dem::feature::POWER_FORECAST_REPORTING
     | dem::feature::START_TIME_ADJUSTMENT
@@ -225,10 +224,8 @@ fuzz_target!(|data: &[u8]| {
     let appliance = Appliance::new(seed);
     let evse_cluster: EnergyEvse<'_, Appliance, TARGETS_PER_DAY> =
         EnergyEvse::new(&appliance, ALL_FEATURES);
-    let water_cluster = WaterHeaterManagement::new(
-        &appliance,
-        WaterHeaterHeatSourceBitmap::HEAT_PUMP,
-    );
+    let water_cluster =
+        WaterHeaterManagement::new(&appliance, WaterHeaterHeatSourceBitmap::HEAT_PUMP);
     let dem_cluster = DeviceEnergyManagement::new(&appliance, DEM_FEATURES);
 
     let Ok(evse_d) = EnergyEvse::<Appliance, TARGETS_PER_DAY>::conforming(
@@ -243,8 +240,7 @@ fuzz_target!(|data: &[u8]| {
     ) else {
         return;
     };
-    let Ok(dem_d) =
-        DeviceEnergyManagement::<Appliance>::conforming(DEM_FEATURES, &Optional::NONE)
+    let Ok(dem_d) = DeviceEnergyManagement::<Appliance>::conforming(DEM_FEATURES, &Optional::NONE)
     else {
         return;
     };
@@ -298,7 +294,13 @@ fuzz_target!(|data: &[u8]| {
         water_cluster.poll(now);
         dem_cluster.poll(now);
         evse_cluster.poll();
-        check(&appliance, &evse_cluster, &water_cluster, &dem_cluster, fabric);
+        check(
+            &appliance,
+            &evse_cluster,
+            &water_cluster,
+            &dem_cluster,
+            fabric,
+        );
     }
 });
 

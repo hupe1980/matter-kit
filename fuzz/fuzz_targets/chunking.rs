@@ -59,10 +59,7 @@ const fn cluster(id: u32) -> ClusterDescriptor<'static> {
 
 const EP0: &[ClusterDescriptor<'static>] = &[cluster(0x0006), cluster(0x0008)];
 const EP1: &[ClusterDescriptor<'static>] = &[cluster(0x0028)];
-const ENDPOINTS: &[Endpoint<'static>] = &[
-    Endpoint::new(0, EP0),
-    Endpoint::new(1, EP1),
-];
+const ENDPOINTS: &[Endpoint<'static>] = &[Endpoint::new(0, EP0), Endpoint::new(1, EP1)];
 
 struct All;
 impl AccessControl for All {
@@ -84,7 +81,11 @@ impl Fuzzed<'_> {
             .wrapping_add(resolved.cluster.id as usize)
             .wrapping_mul(31)
             .wrapping_add(resolved.attribute as usize);
-        let a = self.shape.get(key % self.shape.len().max(1)).copied().unwrap_or(0);
+        let a = self
+            .shape
+            .get(key % self.shape.len().max(1))
+            .copied()
+            .unwrap_or(0);
         let b = self
             .shape
             .get((key.wrapping_add(1)) % self.shape.len().max(1))

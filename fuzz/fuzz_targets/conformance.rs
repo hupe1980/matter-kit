@@ -36,7 +36,10 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let index = usize::from(u16::from_le_bytes([head[0], head[1]]));
-    let Some(cluster) = generated::ALL.get(index % generated::ALL.len().max(1)).copied() else {
+    let Some(cluster) = generated::ALL
+        .get(index % generated::ALL.len().max(1))
+        .copied()
+    else {
         return;
     };
     let feature_map = u32::from_le_bytes([head[2], head[3], head[4], head[5]]);
@@ -66,7 +69,9 @@ fuzz_target!(|data: &[u8]| {
     // Property 4, checked directly against the tables rather than through the validator, so
     // the two halves cannot agree on the same mistake.
     for attribute in cluster.attributes {
-        if attribute.conform.verdict(&Probe { descriptor: &descriptor }) == Conformance::Disallowed
+        if attribute.conform.verdict(&Probe {
+            descriptor: &descriptor,
+        }) == Conformance::Disallowed
         {
             assert!(
                 !descriptor.attributes.iter().any(|a| a.id == attribute.id),

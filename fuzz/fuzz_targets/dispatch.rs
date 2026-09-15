@@ -43,10 +43,7 @@ const ATTRS: &[AttributeDescriptor] = &[
     AttributeDescriptor::read_write(0x0000),
     AttributeDescriptor::read_write(0x0001),
 ];
-const CMDS: &[CommandDescriptor] = &[
-    CommandDescriptor::new(0x00),
-    CommandDescriptor::new(0x01),
-];
+const CMDS: &[CommandDescriptor] = &[CommandDescriptor::new(0x00), CommandDescriptor::new(0x01)];
 
 const fn cluster(id: u32) -> ClusterDescriptor<'static> {
     ClusterDescriptor {

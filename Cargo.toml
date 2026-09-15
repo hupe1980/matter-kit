@@ -8,21 +8,21 @@ exclude = ["fuzz", "interop"]
 
 [package]
 name = "matter-kit"
-version = "0.0.1"
+version = "0.1.0"
+authors = ["hupe1980"]
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 description = "Matter (CSA smart-home standard) protocol implementation in Rust: no_std, no-alloc, executor-agnostic"
 repository = "https://github.com/hupe1980/matter-kit"
-homepage = "https://github.com/hupe1980/matter-kit"
+# The guides, not the source: `repository` already names the source, and cargo warns when the
+# two are the same URL. This is what `site/` deploys to.
+homepage = "https://hupe1980.github.io/matter-kit"
 documentation = "https://docs.rs/matter-kit"
 keywords = ["matter", "smart-home", "iot", "thread", "embedded"]
 categories = ["network-programming", "embedded", "encoding", "no-std"]
 readme = "README.md"
 exclude = ["specs/", "concepts/", "site/"]
-
-[lib]
-name = "matter_kit"
 
 [features]
 # The default build is the certifiable device build: `no_std`, no allocation, UDP + MRP.

@@ -42,7 +42,10 @@ fuzz_target!(|data: &[u8]| {
             "encoded_len lied about {protocol:?}"
         );
         if let Ok((again, _)) = ProtocolHeader::decode(&buf[..n]) {
-            assert_eq!(again, protocol, "a protocol header did not survive a round trip");
+            assert_eq!(
+                again, protocol,
+                "a protocol header did not survive a round trip"
+            );
         }
     }
 });

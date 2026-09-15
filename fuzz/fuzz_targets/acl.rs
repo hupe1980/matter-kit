@@ -146,7 +146,10 @@ fuzz_target!(|data: &[u8]| {
             // Property 7: whatever the list now holds, a read of it is TLV a client can parse.
             let mut buf = [0u8; 4096];
             let mut w = TlvWriter::new(&mut buf);
-            if cluster.read(&resolved, &ctx, &mut w, Tag::Anonymous).is_ok() {
+            if cluster
+                .read(&resolved, &ctx, &mut w, Tag::Anonymous)
+                .is_ok()
+            {
                 let bytes = w.finish().expect("a completed read is a complete encoding");
                 TlvReader::validate(bytes).expect("a served ACL must decode");
             }

@@ -82,6 +82,13 @@ jobs:
       - run: cargo doc --features std --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # `fuzz/` is a workspace of its own, so nothing above compiles a single line of it: the
+      # fuzz targets call this crate's API and drift out of step with it silently, and the
+      # only thing that used to notice was the nightly Fuzz job, fifteen minutes in. This is
+      # the same compile error thirteen seconds into a pull request. `cargo check` rather than
+      # `cargo fuzz build` because type-checking needs neither nightly nor a sanitizer.
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
+      - run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
 
   msrv:
     name: MSRV
@@ -122,6 +129,10 @@ jobs:
       # as a tool that did not land, rather than as `error: no such command: fuzz` from inside
       # a twenty-seven-iteration loop.
       - run: cargo fuzz --version
+      # Every target built before any is run, so a compile error is a failed build rather
+      # than a run that got thirteen minutes into the list before reaching the broken one.
+      - run: |
+          cargo fuzz build --target "$(rustc -vV | sed -n 's/^host: //p')"
       # A minute each on a pull request, to catch a regression that a new corpus entry
       # would find immediately. The nightly schedule is where they get real time.
       #

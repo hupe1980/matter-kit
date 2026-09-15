@@ -62,9 +62,13 @@ fuzz_target!(|data: &[u8]| {
             Err(status) => {
                 // Property 2: the two refusals are the only ones, and both reset the buffer.
                 assert!(
-                    status == Status::NOT_ENOUGH_MEMORY || status == Status::CONDITIONS_NOT_SATISFIED
+                    status == Status::NOT_ENOUGH_MEMORY
+                        || status == Status::CONDITIONS_NOT_SATISFIED
                 );
-                assert!(device.message().is_empty(), "a refusal leaves nothing behind");
+                assert!(
+                    device.message().is_empty(),
+                    "a refusal leaves nothing behind"
+                );
                 buffered = 0;
             }
         }

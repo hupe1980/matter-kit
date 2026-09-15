@@ -45,8 +45,7 @@ const CMDS: &[CommandDescriptor] = &[
     CommandDescriptor::new(0).with_response(1),
     CommandDescriptor::new(2),
     CommandDescriptor::new(3).with_access(
-        Access::invoke(Privilege::Operate)
-            .with_qualities(matter_kit::dm::AccessQualities::TIMED),
+        Access::invoke(Privilege::Operate).with_qualities(matter_kit::dm::AccessQualities::TIMED),
     ),
 ];
 
@@ -67,10 +66,7 @@ const fn cluster(
 
 const EP0: &[ClusterDescriptor<'static>] = &[cluster(0x0006, ATTRS_A), cluster(0x0028, ATTRS_B)];
 const EP1: &[ClusterDescriptor<'static>] = &[cluster(0x0008, ATTRS_B)];
-const ENDPOINTS: &[Endpoint<'static>] = &[
-    Endpoint::new(0, EP0),
-    Endpoint::new(1, EP1),
-];
+const ENDPOINTS: &[Endpoint<'static>] = &[Endpoint::new(0, EP0), Endpoint::new(1, EP1)];
 
 /// Denies one cluster, to exercise the discard path.
 struct Policy(Privilege);
@@ -141,7 +137,12 @@ impl matter_kit::im::ClusterHandler for Reader {
 /// Every context a handler might run in, so the Timed and fabric branches are reached.
 const CONTEXTS: [InteractionContext<'static>; 2] = [
     InteractionContext::new(),
-    InteractionContext::new().timed().with_fabric(matter_kit::msg::FabricIndex(1)).with_large_messages().fabric_filtered().on_session(matter_kit::msg::SessionId(1)),
+    InteractionContext::new()
+        .timed()
+        .with_fabric(matter_kit::msg::FabricIndex(1))
+        .with_large_messages()
+        .fabric_filtered()
+        .on_session(matter_kit::msg::SessionId(1)),
 ];
 
 fuzz_target!(|data: &[u8]| {
@@ -170,7 +171,8 @@ fuzz_target!(|data: &[u8]| {
         let server = Server::new(node, &policy, &Reader, 24);
         let mut scratch = [0u8; 256];
         let mut buf = [0u8; 2048];
-        let Ok((bytes, outcome)) = server.serve(paths.clone(), &ctx, None, &mut scratch, &mut buf) else {
+        let Ok((bytes, outcome)) = server.serve(paths.clone(), &ctx, None, &mut scratch, &mut buf)
+        else {
             continue;
         };
         assert!(outcome.reports <= 24, "the report limit did not hold");
@@ -203,7 +205,10 @@ fuzz_target!(|data: &[u8]| {
                 );
             }
         }
-        assert_eq!(seen, outcome.reports, "the count must match what was written");
+        assert_eq!(
+            seen, outcome.reports,
+            "the count must match what was written"
+        );
     }
 });
 

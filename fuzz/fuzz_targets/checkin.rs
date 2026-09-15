@@ -81,7 +81,10 @@ fuzz_target!(|data: &[u8]| {
         let accepted = registration.accept(&mut scratch[..chunk.len()]).is_ok();
         let offset = registration.offset();
         if accepted {
-            assert!(offset > last_offset, "an accepted message moves the window on");
+            assert!(
+                offset > last_offset,
+                "an accepted message moves the window on"
+            );
         } else {
             assert_eq!(offset, last_offset, "a rejected message moves nothing");
         }

@@ -45,7 +45,10 @@ fuzz_target!(|data: &[u8]| {
 
     // A Certification Declaration's CMS wrapper, and the TLV inside it.
     if let Ok(signed) = SignedData::parse(data) {
-        assert!(data.windows(signed.content.len()).any(|w| w == signed.content));
+        assert!(
+            data.windows(signed.content.len())
+                .any(|w| w == signed.content)
+        );
         let _ = signed.elements();
     }
 

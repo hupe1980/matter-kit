@@ -33,7 +33,9 @@ fuzz_target!(|data: &[u8]| {
     let mut buf = [0u8; MAX_ATTESTATION_ELEMENTS];
 
     if let Ok(cd) = CertificationElements::decode(data) {
-        let encoded = cd.encode(&mut buf).expect("a decoded declaration re-encodes");
+        let encoded = cd
+            .encode(&mut buf)
+            .expect("a decoded declaration re-encodes");
         let len = encoded.len();
         let mut again = [0u8; MAX_ATTESTATION_ELEMENTS];
         again[..len].copy_from_slice(encoded);

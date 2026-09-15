@@ -26,32 +26,32 @@
 
 #![no_main]
 
+use core::cell::RefCell;
 use libfuzzer_sys::fuzz_target;
+use matter_kit::clusters::administrator_commissioning::{
+    self as admin, AdministratorCommissioning,
+};
 use matter_kit::clusters::basic_information::{BasicInformation, Location, Product};
-use matter_kit::clusters::general_commissioning::{
-    self, GeneralCommissioning, RegulatoryLocation,
+use matter_kit::clusters::general_commissioning::{self, GeneralCommissioning, RegulatoryLocation};
+use matter_kit::clusters::network_commissioning::{
+    self as netcomm, Capabilities, EthernetDriver, NetworkCommissioning,
 };
 use matter_kit::clusters::operational_credentials::{
     self as opcreds, DeviceAttestation, OperationalCredentials,
 };
-use matter_kit::clusters::network_commissioning::{
-    self as netcomm, Capabilities, EthernetDriver, NetworkCommissioning,
-};
-use matter_kit::clusters::administrator_commissioning::{self as admin, AdministratorCommissioning};
-use matter_kit::commissioning::window::CommissioningWindow;
-use matter_kit::clusters::{basic_information, descriptor, Descriptor};
+use matter_kit::clusters::{Descriptor, basic_information, descriptor};
 use matter_kit::commissioning::failsafe::{BasicCommissioningInfo, FailSafe};
+use matter_kit::commissioning::window::CommissioningWindow;
 use matter_kit::crypto::{KeyPurpose, KeyStore, SoftKeyStore, SymmetricKey};
 use matter_kit::dm::{Endpoint, Node, Privilege};
 use matter_kit::fabric::FabricTable;
-use matter_kit::{Config, DefaultConfig};
-use core::cell::RefCell;
 use matter_kit::im::{
     AccessControl, AttributePath, InvokeRequest, InvokeResponseMessage, Outcome, Server,
     WriteRequest, WriteResponse,
 };
 use matter_kit::msg::VendorId;
 use matter_kit::platform::{Duration, Instant};
+use matter_kit::{Config, DefaultConfig};
 
 struct AllowAll;
 
@@ -105,7 +105,10 @@ fuzz_target!(|data: &[u8]| {
         Endpoint::new(1, &net_clusters),
     ];
     let node = Node::new(&endpoints);
-    assert!(node.validate().is_ok(), "the fixture node must be well formed");
+    assert!(
+        node.validate().is_ok(),
+        "the fixture node must be well formed"
+    );
 
     let location = Location::region_agnostic();
     let fail_safe = RefCell::new(FailSafe::new(BasicCommissioningInfo::default()));
@@ -116,7 +119,9 @@ fuzz_target!(|data: &[u8]| {
         .import(KeyPurpose::DeviceAttestation, &[7u8; 32])
         .expect("a valid private key");
     let keys = RefCell::new(store);
-    let rng = RefCell::new(matter_kit::platform::sim::SimRng::new(0xF0FF_1234_5678_9ABC));
+    let rng = RefCell::new(matter_kit::platform::sim::SimRng::new(
+        0xF0FF_1234_5678_9ABC,
+    ));
     let challenge = SymmetricKey::new([0x5A; 16]);
 
     let ethernet = EthernetDriver;
@@ -150,7 +155,11 @@ fuzz_target!(|data: &[u8]| {
     if control & 0b1000 != 0 {
         handler.2.arm_fail_safe(60, 0, None, false, now);
     }
-    let before = handler.2.fail_safe().armed(now).map(|a| a.cumulative_expires_at);
+    let before = handler
+        .2
+        .fail_safe()
+        .armed(now)
+        .map(|a| a.cumulative_expires_at);
 
     let access = AllowAll;
     let server = Server::new(node, &access, &handler, 16);
@@ -247,7 +256,9 @@ fuzz_target!(|data: &[u8]| {
     // Property 3.
     assert!(matches!(
         handler.2.regulatory_config(),
-        RegulatoryLocation::Indoor | RegulatoryLocation::Outdoor | RegulatoryLocation::IndoorOutdoor
+        RegulatoryLocation::Indoor
+            | RegulatoryLocation::Outdoor
+            | RegulatoryLocation::IndoorOutdoor
     ));
 });
 
@@ -266,5 +277,9 @@ fn request_context<'a>(
         .on_session(matter_kit::msg::SessionId(1))
         // Without it, §11.18's signing commands all refuse before decoding anything.
         .with_attestation_challenge(challenge);
-    if request.timed_request { ctx.timed() } else { ctx }
+    if request.timed_request {
+        ctx.timed()
+    } else {
+        ctx
+    }
 }

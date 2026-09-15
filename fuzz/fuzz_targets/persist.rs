@@ -18,12 +18,12 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use matter_kit::Config;
 use matter_kit::config::DefaultConfig;
 use matter_kit::im::persist;
 use matter_kit::im::subscription::SubscriptionTable;
 use matter_kit::platform::Instant;
 use matter_kit::tlv::{Tag, TlvWriter};
-use matter_kit::Config;
 
 type Table = SubscriptionTable<
     DefaultConfig,
@@ -53,7 +53,10 @@ fuzz_target!(|data: &[u8]| {
     assert_eq!(table.next_deadline(), None);
     for subscription in table.iter() {
         assert!(subscription.session.is_none());
-        assert!(subscription.fabric_index.is_some(), "a persisted record has a fabric");
+        assert!(
+            subscription.fabric_index.is_some(),
+            "a persisted record has a fabric"
+        );
         assert!(subscription.peer_node_id.is_some(), "…and a subscriber");
         assert!(
             !subscription.paths.is_empty() || !subscription.event_paths.is_empty(),

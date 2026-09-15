@@ -19,7 +19,9 @@ fuzz_target!(|data: &[u8]| {
     let mut buf = [0u8; 2048];
 
     if let Ok(sigma1) = Sigma1::decode(data) {
-        let encoded = sigma1.encode(&mut buf).expect("a decoded Sigma1 re-encodes");
+        let encoded = sigma1
+            .encode(&mut buf)
+            .expect("a decoded Sigma1 re-encodes");
         let len = encoded.len();
         let mut again = [0u8; 2048];
         again[..len].copy_from_slice(encoded);
@@ -36,7 +38,9 @@ fuzz_target!(|data: &[u8]| {
     }
 
     if let Ok(sigma2) = Sigma2::decode(data) {
-        let encoded = sigma2.encode(&mut buf).expect("a decoded Sigma2 re-encodes");
+        let encoded = sigma2
+            .encode(&mut buf)
+            .expect("a decoded Sigma2 re-encodes");
         let len = encoded.len();
         let mut again = [0u8; 2048];
         again[..len].copy_from_slice(encoded);
@@ -61,6 +65,9 @@ fuzz_target!(|data: &[u8]| {
         let len = encoded.len();
         let mut again = [0u8; 2048];
         again[..len].copy_from_slice(encoded);
-        assert_eq!(Sigma2Resume::decode(&again[..len]).expect("decodes"), resume);
+        assert_eq!(
+            Sigma2Resume::decode(&again[..len]).expect("decodes"),
+            resume
+        );
     }
 });

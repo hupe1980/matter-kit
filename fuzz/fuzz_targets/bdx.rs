@@ -40,8 +40,14 @@ macro_rules! round_trip {
             let again = <$ty>::decode(canonical).expect("our own encoding decodes");
             assert_eq!(again, $message, "a round trip changed the message");
             let mut second = [0u8; 2048];
-            let m = again.encode(&mut second).expect("the same message encodes again");
-            assert_eq!(second.get(..m), Some(canonical), "encoding is not canonical");
+            let m = again
+                .encode(&mut second)
+                .expect("the same message encodes again");
+            assert_eq!(
+                second.get(..m),
+                Some(canonical),
+                "encoding is not canonical"
+            );
         }
     }};
 }
@@ -112,7 +118,9 @@ fuzz_target!(|data: &[u8]| {
         if let Some(length) = length {
             assert!(receiver.received() <= length, "past the negotiated length");
         }
-        let Ok((_, acked)) = receiver.ack() else { break };
+        let Ok((_, acked)) = receiver.ack() else {
+            break;
+        };
         if sender.on_ack(acked, eof).is_err() {
             break;
         }
