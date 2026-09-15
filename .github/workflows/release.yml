@@ -76,11 +76,6 @@ jobs:
       # `exclude` in Cargo.toml is visible, and a specification PDF shipped by accident is a
       # licensing problem rather than a large download.
       - run: cargo package --locked --list
-      - uses: actions/upload-artifact@v4
-        with:
-          name: crate
-          path: target/package/*.crate
-          if-no-files-found: error
 
   publish:
     name: Publish to crates.io
@@ -109,18 +104,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      # A shallow checkout is enough: `generate_release_notes` is computed by GitHub's API
+      # from the commits between tags, not from local history, so the full clone this used to
+      # take was for a changelog nothing generates here.
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@v4
-        with:
-          name: crate
-          path: dist
-      # Generated from the commits, not from a file: a changelog kept by hand is a second
-      # record of what happened, and the two disagree on the release where it matters.
+      # No `.crate` attached. crates.io is where the crate is distributed, and a copy here
+      # would be built by a different invocation from the one that published — two sets of
+      # bytes for one version, with this release attesting to the set nobody installed.
+      #
+      # Notes generated from the commits, not from a file: a changelog kept by hand is a
+      # second record of what happened, and the two disagree on the release where it matters.
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.crate
           generate_release_notes: true
           # A pre-1.0 version is a pre-release, and the marking is what keeps it out of
           # "latest" for anyone who reads that as a recommendation.
