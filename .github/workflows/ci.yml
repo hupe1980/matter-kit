@@ -124,9 +124,19 @@ jobs:
       - run: cargo fuzz --version
       # A minute each on a pull request, to catch a regression that a new corpus entry
       # would find immediately. The nightly schedule is where they get real time.
+      #
+      # `--target` is passed explicitly, and it is not optional. `cargo fuzz` defaults it to
+      # the triple *it* was compiled for — `current_platform`, resolved in its own build — not
+      # to the host it is running on. `install-action` ships statically linked musl binaries,
+      # so the default becomes `x86_64-unknown-linux-musl`: a target rustup has no std for,
+      # and one that is `crt-static`, which the address sanitizer refuses outright
+      # ("sanitizer is incompatible with statically linked libc"). Asking `rustc` for the host
+      # is the only answer that stays right on a different runner or a different install.
       - run: |
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          echo "fuzzing on $host"
           for target in tlv tlv_roundtrip message pase cert case attestation x509 im dm dispatch clusters discovery subscribe chunking acl messaging btp checkin persist conformance scenes energy bdx tcp group ntl; do
-            cargo fuzz run "$target" -- \
+            cargo fuzz run --target "$host" "$target" -- \
               -max_total_time=${{ github.event_name == 'schedule' && 600 || 60 }} \
               -rss_limit_mb=4096
           done
