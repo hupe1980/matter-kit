@@ -42,7 +42,7 @@ use crate::msg::{
     preview, protect, unprotect,
 };
 use crate::platform::{Instant, Peer};
-use crate::session::{SessionKind, SessionTable};
+use crate::session::{SecureSession, SessionKind, SessionTable};
 
 /// The largest a Protocol Header can be (§4.4.3): the exchange flags, the opcode, the
 /// exchange id, a 32-bit protocol id and an acknowledged counter.
@@ -53,7 +53,34 @@ const PROTOCOL_HEADER_MAX: usize = 16;
 
 /// What arrived, once the message has been authenticated and routed.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Received<'a> {
+    /// A group datagram (§4.16), which belongs to the group key store rather than here.
+    ///
+    /// Nothing about it has been decrypted or authenticated: a group message is keyed by an
+    /// operational group key, and which key it is has to be found by trying every installed
+    /// one whose session id matches (§4.17.3.6). Hand `buf` — unchanged — to
+    /// [`group::wire::receive`](crate::group::wire::receive), which does that and returns the
+    /// payload; a node that holds no group keys drops it.
+    Group {
+        /// The Group Session Id from the header, which selects the candidate keys.
+        session_id: SessionId,
+        /// Where it came from.
+        from: Peer,
+    },
+    /// The peer closed the session, and this node has done the same (§4.11.1.4).
+    ///
+    /// The session, its keys and its exchanges are gone by the time this is returned — that
+    /// is what "SHALL remove all state associated with the session" means, and it is done
+    /// here rather than left to the caller because none of that state is the caller's.
+    ///
+    /// What *is* the caller's is everything keyed on a session above this layer: §8.5's
+    /// subscriptions above all, which report on a session and have nowhere to go once it has
+    /// gone, and the §5.5 commissioning channel, which a closed PASE session releases.
+    SessionClosed {
+        /// The session that was closed.
+        session: SessionId,
+    },
     /// A protocol message for the layer above.
     Message {
         /// The exchange it belongs to.
@@ -179,6 +206,23 @@ struct UnsecuredPeer {
     we_initiated: bool,
 }
 
+/// A session that was evicted to make room for a new one (§4.11.1.1).
+///
+/// The session and its exchanges are already gone. What is left is the `CLOSE_SESSION`
+/// status report the specification owes the evicted peer, framed and ready in the caller's
+/// output buffer.
+#[derive(Debug, Clone, Copy)]
+#[must_use = "§4.11.1.1 step 2a owes the evicted peer a CloseSession status report"]
+pub struct Evicted {
+    /// The session that was removed.
+    pub session: SessionId,
+    /// Where its peer was, if the session knew — nothing to send to if it did not.
+    pub peer: Option<Peer>,
+    /// How many octets of the output buffer the report occupies. Zero if it could not be
+    /// framed, which is not a reason to abandon the eviction.
+    pub len: usize,
+}
+
 /// A node's message processing: sessions, exchanges, and the framing between them.
 ///
 /// `S` is [`Config::SESSIONS`] and `X` is `SESSIONS * EXCHANGES_PER_SESSION`.
@@ -250,7 +294,7 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
     /// Applies §4.9's privacy processing to outgoing secure unicast messages.
     ///
     /// Off by default, and deliberately. The **P** flag is only *required* on group messages
-    /// (§4.16.4, §4.18): on a secure unicast session it is the sender's choice, and what it
+    /// (§4.16.2 step 2c, §4.18): on a secure unicast session it is the sender's choice, and what it
     /// buys is hiding the message counter from a passive observer on the link — the counter
     /// is already authenticated, and anyone with the key can read it either way. What it
     /// costs is depending on every peer having exercised its deobfuscation path, which is
@@ -304,9 +348,116 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         &self.sessions
     }
 
-    /// The session table, mutably — how a completed PASE or CASE installs its keys.
+    /// The session table, mutably — for the fields a completed handshake fills in
+    /// afterwards, such as §11.18.6.8 step 10a's accessing fabric.
+    ///
+    /// Installing a session goes through [`Messaging::install_session`] instead: a session
+    /// and its exchanges are one lifetime, and this reference only reaches one of them.
     pub const fn sessions_mut(&mut self) -> &mut SessionTable<C, S> {
         &mut self.sessions
+    }
+
+    /// Installs the session a handshake produced, evicting one if there is no room
+    /// (§4.11.1.1).
+    ///
+    /// A session table that answers `NoSpace` is a node that can be commissioned exactly
+    /// `Config::SESSIONS` times and then never again — and the failure appears at the
+    /// *next* administrator, not at the one who filled it. §4.11.1.1 is explicit about the
+    /// alternative and about its three steps, in order:
+    ///
+    /// 1. the least recently used session, by `SessionTimestamp`;
+    /// 2. a `StatusReport(SUCCESS, SECURE_CHANNEL, CLOSE_SESSION)` **to that peer**, and
+    ///    only then "remove all state associated with the session";
+    /// 3. the new session's own establishment message, which the caller was sending anyway.
+    ///
+    /// Step 2's two halves are why this takes buffers and returns an [`Evicted`]: the report
+    /// has to be framed while the session that encrypts it still exists, and put on the wire
+    /// by whoever owns the socket. The removal has already happened when this returns; what
+    /// is left is a datagram the caller sends to [`Evicted::peer`]. Dropping it costs the
+    /// peer nothing worse than a session it believes in until its next message fails, which
+    /// is why this is `must_use` rather than an error.
+    ///
+    /// `Ok(None)` is the ordinary case: there was room and nothing was evicted.
+    pub fn install_session(
+        &mut self,
+        session: SecureSession,
+        now: Instant,
+        randomness: u32,
+        scratch: &mut [u8],
+        out: &mut [u8],
+    ) -> Result<Option<Evicted>> {
+        if self.sessions.len() < S {
+            self.sessions.insert(session)?;
+            return Ok(None);
+        }
+        let Some(victim) = self.sessions.least_recently_used() else {
+            // No room and nothing to evict means `S == 0`, which `AssertValid` forbids.
+            bail!(NoSpace)
+        };
+        let peer = self.sessions.find(victim).and_then(|s| s.peer);
+        // Framed before the removal, because it is encrypted under the evicted session's own
+        // keys: a report built afterwards has nothing to encrypt it with.
+        let report = crate::sc::status::StatusReport {
+            general: crate::sc::status::GeneralCode::Success,
+            protocol: ProtocolId::SECURE_CHANNEL,
+            protocol_code: crate::sc::status::SecureChannelCode::CloseSession as u16,
+            data: &[],
+        };
+        let mut body = [0u8; 16];
+        let len = report.encode(&mut body)?;
+        let Some(body) = body.get(..len) else {
+            bail!(BufferTooSmall)
+        };
+        let exchange = self.open(victim, ProtocolId::SECURE_CHANNEL, now)?;
+        let framed = self
+            .send(
+                exchange,
+                crate::sc::opcode::STATUS_REPORT,
+                false,
+                body,
+                now,
+                randomness,
+                scratch,
+                out,
+            )
+            .map(|(n, _)| n);
+        // §4.13.3.1: "remove all state associated with the session" — the exchanges on it
+        // included, and including the one just used to say goodbye.
+        self.close_session(victim);
+        self.sessions.insert(session)?;
+        Ok(Some(Evicted {
+            session: victim,
+            peer,
+            len: framed.unwrap_or(0),
+        }))
+    }
+
+    /// Removes a session and everything associated with it (§4.13.3.1).
+    ///
+    /// Returns whether there was one. The exchanges on that session go with it: an exchange
+    /// outlives its session only as an entry nothing can ever answer on, holding a slot in a
+    /// fixed-capacity table until it times out.
+    pub fn close_session(&mut self, session: SessionId) -> bool {
+        self.exchanges.close_session(session);
+        self.sessions.remove(session)
+    }
+
+    /// Removes every session on a fabric, and their exchanges — what `RemoveFabric`
+    /// (§11.18.6.12) owes at the message layer.
+    ///
+    /// Returns how many sessions went. The clusters' half of the same command is
+    /// [`Lifecycle::FabricRemoved`](crate::im::Lifecycle::FabricRemoved).
+    pub fn remove_fabric(&mut self, fabric: crate::msg::FabricIndex) -> usize {
+        let doomed: heapless::Vec<SessionId, S> = self
+            .sessions
+            .iter()
+            .filter(|s| s.fabric_index == fabric)
+            .map(|s| s.local_session_id)
+            .collect();
+        for session in &doomed {
+            self.exchanges.close_session(*session);
+        }
+        self.sessions.remove_fabric(fabric)
     }
 
     /// The exchange table.
@@ -389,9 +540,20 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
     ) -> Result<Received<'b>> {
         let head = preview(buf)?;
         if matches!(head.session_type, SessionType::Group) {
-            // Group messages are keyed by an operational group key rather than by a session,
-            // and this node has no group key store yet.
-            bail!(Unsupported)
+            // §4.16: a group message is keyed by an *operational group key* and belongs to no
+            // session, so none of this function's machinery applies to it — there is no
+            // session to find, no replay window of a session's to move, and no exchange, since
+            // §4.16.2 step 2c sets only the P flag, so a group message is never
+            // reliable and never acknowledged.
+            //
+            // It is handed back rather than refused. A device with a group key store routes it
+            // to [`group::wire::receive`](crate::group::wire::receive), which is the same layer
+            // as this one for keys it holds rather than sessions; a device without one drops
+            // it. Answering `Unsupported` here made the two halves look like one missing one.
+            return Ok(Received::Group {
+                session_id: head.session_id,
+                from,
+            });
         }
 
         let (header, range) = if head.session_id == SessionId::UNSECURED {
@@ -498,6 +660,31 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         {
             // A standalone acknowledgement carries nothing above the reliability layer.
             return Ok(Received::Acknowledged { exchange: key });
+        }
+
+        // §4.11.1.4: "If a Node has either sent or received a CloseSession StatusReport, that
+        // Node SHALL remove all state associated with the session." Both halves are the
+        // message layer's, and this is the half a node is most likely to leave out — sending
+        // one is a decision it makes, receiving one is something that happens to it.
+        //
+        // Handled here rather than handed upward because the rule is about *this* layer's
+        // state: the session, its keys, its counters and its exchanges, including the exchange
+        // this message arrived on. A node that passed it up would answer on a session the
+        // specification says is already gone.
+        if !header.is_unsecured()
+            && protocol_header.protocol == ProtocolId::SECURE_CHANNEL
+            && protocol_header.opcode == crate::sc::opcode::STATUS_REPORT
+            && matches!(
+                crate::sc::status::StatusReport::decode(body),
+                Ok(report)
+                    if report.protocol == ProtocolId::SECURE_CHANNEL
+                        && report.protocol_code
+                            == crate::sc::status::SecureChannelCode::CloseSession as u16
+            )
+        {
+            let session = header.session_id;
+            self.close_session(session);
+            return Ok(Received::SessionClosed { session });
         }
 
         Ok(Received::Message {
@@ -849,6 +1036,267 @@ mod tests {
     const PEER: Peer = Peer::Udp(crate::platform::PeerAddr::new([
         0xFE, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
     ]));
+
+    fn keys() -> crate::session::EstablishedKeys {
+        crate::session::EstablishedKeys::derive(b"shared secret", &[]).expect("derive")
+    }
+
+    fn session_on(id: u16, fabric: u8, now: Instant) -> SecureSession {
+        let mut s = SecureSession::new(
+            SessionId(id),
+            SessionId(id.wrapping_add(100)),
+            SessionKind::Case,
+            crate::session::Role::Responder,
+            keys(),
+            1,
+            now,
+        );
+        s.fabric_index = crate::msg::FabricIndex(fabric);
+        s.peer = Some(PEER);
+        s
+    }
+
+    /// §4.11.1.4: "The CloseSession StatusReport SHALL only be sent encrypted within an
+    /// exchange associated with a PASE or CASE session." So one that arrives on the *unsecured*
+    /// session closes nothing — otherwise anybody who can reach the port could end a
+    /// commissioned node's sessions with a datagram costing them nothing to send.
+    #[test]
+    fn an_unsecured_close_session_report_closes_nothing() {
+        let mut node = Node::new(1, 100, 7);
+        let mut scratch = [0u8; 512];
+        let mut wire = [0u8; 512];
+        node.install_session(session_on(1, 1, at(0)), at(0), 0, &mut scratch, &mut wire)
+            .expect("install");
+
+        // A stranger's unsecured datagram carrying exactly the report a peer would send.
+        let mut attacker = Node::new(2, 200, 9);
+        let report = crate::sc::status::StatusReport {
+            general: crate::sc::status::GeneralCode::Success,
+            protocol: ProtocolId::SECURE_CHANNEL,
+            protocol_code: crate::sc::status::SecureChannelCode::CloseSession as u16,
+            data: &[],
+        };
+        let mut body = [0u8; 16];
+        let len = report.encode(&mut body).expect("encode");
+        let exchange = attacker
+            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .expect("open");
+        let (sent, _) = attacker
+            .send(
+                exchange,
+                crate::sc::opcode::STATUS_REPORT,
+                false,
+                body.get(..len).expect("body"),
+                at(0),
+                0,
+                &mut scratch,
+                &mut wire,
+            )
+            .expect("send");
+
+        let received = node.receive(wire.get_mut(..sent).expect("wire"), PEER, at(1));
+        assert!(
+            matches!(received, Ok(Received::Message { .. })),
+            "an unsecured status report is an ordinary message, got {received:?}"
+        );
+        assert!(
+            node.sessions().find(SessionId(1)).is_some(),
+            "no unauthenticated datagram may close a session"
+        );
+    }
+
+    /// §4.16: a group datagram belongs to the group key store, and this layer says so rather
+    /// than refusing it. Refusing made a node that holds group keys look like a node that
+    /// cannot receive groupcast at all.
+    #[test]
+    fn a_group_datagram_is_handed_back_rather_than_refused() {
+        let mut node = Node::new(1, 100, 7);
+        // §4.4.1.2's session type bits: a group message names its Group Session Id and carries
+        // the session type in the low bits of the security flags.
+        let mut datagram = [0u8; 32];
+        datagram[0] = 0b0000_0000; // message flags: no source, no destination
+        datagram[1..3].copy_from_slice(&0x1234u16.to_le_bytes()); // group session id
+        datagram[3] = 0b0000_0001; // security flags: session type = group
+        datagram[4..8].copy_from_slice(&7u32.to_le_bytes()); // message counter
+
+        let received = node.receive(&mut datagram, PEER, at(0));
+        assert!(
+            matches!(
+                received,
+                Ok(Received::Group { session_id, from })
+                    if session_id == SessionId(0x1234) && from == PEER
+            ),
+            "expected a group hand-off, got {received:?}"
+        );
+        assert_eq!(
+            node.exchanges().len(),
+            0,
+            "a group message opens nothing: §4.16.2 step 2c sets only the P flag"
+        );
+    }
+
+    /// §4.11.1.4: "If a Node has either sent or received a CloseSession StatusReport, that
+    /// Node SHALL remove all state associated with the session." The receiving half is the
+    /// one a node leaves out, because sending one is a decision and receiving one is not.
+    #[test]
+    fn a_close_session_report_from_the_peer_closes_the_session_here_too() {
+        let mut a = Node::new(1, 100, 7);
+        let mut b = Node::new(2, 200, 9);
+        let mut scratch = [0u8; 512];
+        let mut wire = [0u8; 512];
+
+        // The same keys at both ends, with opposite roles, is a session the two share.
+        let mut left = SecureSession::new(
+            SessionId(1),
+            SessionId(2),
+            SessionKind::Case,
+            crate::session::Role::Initiator,
+            keys(),
+            1,
+            at(0),
+        );
+        left.peer = Some(PEER);
+        let mut right = SecureSession::new(
+            SessionId(2),
+            SessionId(1),
+            SessionKind::Case,
+            crate::session::Role::Responder,
+            keys(),
+            1,
+            at(0),
+        );
+        right.peer = Some(PEER);
+        a.install_session(left, at(0), 0, &mut scratch, &mut wire)
+            .expect("install");
+        b.install_session(right, at(0), 0, &mut scratch, &mut wire)
+            .expect("install");
+        b.open(SessionId(2), ProtocolId::INTERACTION_MODEL, at(0))
+            .expect("an exchange that the close has to take with it");
+
+        // A closes its end, which frames the report §4.11.1.4 owes the peer: a new exchange,
+        // and no R flag.
+        let report = crate::sc::status::StatusReport {
+            general: crate::sc::status::GeneralCode::Success,
+            protocol: ProtocolId::SECURE_CHANNEL,
+            protocol_code: crate::sc::status::SecureChannelCode::CloseSession as u16,
+            data: &[],
+        };
+        let mut body = [0u8; 16];
+        let len = report.encode(&mut body).expect("encode");
+        let exchange = a
+            .open(SessionId(1), ProtocolId::SECURE_CHANNEL, at(0))
+            .expect("open");
+        let (sent, _) = a
+            .send(
+                exchange,
+                crate::sc::opcode::STATUS_REPORT,
+                false,
+                body.get(..len).expect("body"),
+                at(0),
+                0,
+                &mut scratch,
+                &mut wire,
+            )
+            .expect("send");
+
+        let received = b.receive(wire.get_mut(..sent).expect("wire"), PEER, at(1));
+        assert!(
+            matches!(received, Ok(Received::SessionClosed { session }) if session == SessionId(2)),
+            "expected the session to be closed, got {received:?}"
+        );
+        assert!(b.sessions().find(SessionId(2)).is_none());
+        assert_eq!(
+            b.exchanges().len(),
+            0,
+            "§4.13.3.1: all state associated with the session"
+        );
+    }
+
+    /// §4.11.1.1: a full session table evicts the least recently used session rather than
+    /// refusing the handshake. Refusing it is a node that can be commissioned
+    /// `Config::SESSIONS` times and never again.
+    #[test]
+    fn a_full_session_table_evicts_the_least_recently_used_session() {
+        // `S` is 4 for this alias, so the fifth session has to displace one.
+        let mut node = Node::new(1, 100, 7);
+        let mut scratch = [0u8; 512];
+        let mut out = [0u8; 512];
+        for i in 0..4u16 {
+            let evicted = node
+                .install_session(
+                    session_on(i + 1, 1, at(u64::from(i))),
+                    at(u64::from(i)),
+                    0,
+                    &mut scratch,
+                    &mut out,
+                )
+                .expect("install");
+            assert!(evicted.is_none(), "there was room for session {i}");
+        }
+        assert_eq!(node.sessions().len(), 4);
+
+        let evicted = node
+            .install_session(session_on(9, 1, at(10)), at(10), 0, &mut scratch, &mut out)
+            .expect("install")
+            .expect("the table was full, so one had to go");
+
+        // Step 1: the least recently used, which is the one installed first.
+        assert_eq!(evicted.session, SessionId(1));
+        // Step 2a: a datagram for its peer, framed before the session went away.
+        assert_eq!(evicted.peer, Some(PEER));
+        assert!(evicted.len > 0, "the CloseSession report was framed");
+        // Step 2b: and the session itself is gone, with the new one in its place.
+        assert!(node.sessions().find(SessionId(1)).is_none());
+        assert!(node.sessions().find(SessionId(9)).is_some());
+        assert_eq!(node.sessions().len(), 4);
+    }
+
+    /// §4.13.3.1: closing a session removes "all state associated with" it, which includes
+    /// the exchanges on it. An exchange that outlives its session can never be answered on,
+    /// and holds a slot in a fixed-capacity table until it times out.
+    #[test]
+    fn closing_a_session_closes_its_exchanges() {
+        let mut node = Node::new(1, 100, 7);
+        let mut scratch = [0u8; 512];
+        let mut out = [0u8; 512];
+        node.install_session(session_on(1, 1, at(0)), at(0), 0, &mut scratch, &mut out)
+            .expect("install");
+        node.open(SessionId(1), ProtocolId::INTERACTION_MODEL, at(0))
+            .expect("open");
+        node.open(SessionId(1), ProtocolId::INTERACTION_MODEL, at(0))
+            .expect("open");
+        assert_eq!(node.exchanges().len(), 2);
+
+        assert!(node.close_session(SessionId(1)));
+        assert_eq!(node.exchanges().len(), 0, "the exchanges went with it");
+        assert!(node.sessions().find(SessionId(1)).is_none());
+    }
+
+    /// §11.18.6.12: `RemoveFabric` takes the fabric's sessions — and their exchanges — while
+    /// leaving every other fabric's alone.
+    #[test]
+    fn removing_a_fabric_takes_its_sessions_and_their_exchanges() {
+        let mut node = Node::new(1, 100, 7);
+        let mut scratch = [0u8; 512];
+        let mut out = [0u8; 512];
+        node.install_session(session_on(1, 1, at(0)), at(0), 0, &mut scratch, &mut out)
+            .expect("install");
+        node.install_session(session_on(2, 2, at(1)), at(1), 0, &mut scratch, &mut out)
+            .expect("install");
+        node.open(SessionId(1), ProtocolId::INTERACTION_MODEL, at(0))
+            .expect("open");
+        node.open(SessionId(2), ProtocolId::INTERACTION_MODEL, at(0))
+            .expect("open");
+
+        assert_eq!(node.remove_fabric(crate::msg::FabricIndex(1)), 1);
+        assert!(node.sessions().find(SessionId(1)).is_none());
+        assert!(node.sessions().find(SessionId(2)).is_some());
+        assert_eq!(
+            node.exchanges().len(),
+            1,
+            "only the removed fabric's exchange went"
+        );
+    }
 
     /// The unsecured session is what PASE runs over before any key exists.
     #[test]

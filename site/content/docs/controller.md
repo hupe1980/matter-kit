@@ -191,10 +191,13 @@ at the same moment.
 The core is single-threaded by construction: one event loop, one `RefCell` per piece of state, no
 atomics an MCU would have to pay for. A controller on a multi-threaded runtime is not, and the
 `sync-mutex` feature is the seam — `sync::Shared<T>` is a `RefCell` without it and a
-`std::sync::Mutex` with it.
+`std::sync::RwLock` with it. An `RwLock` rather than a `Mutex` so that both builds obey the same
+rule: any number of shared borrows at once, or one exclusive borrow. Code that compiled under
+one and deadlocked under the other would make the feature a behavioural change rather than a
+threading one.
 
-The rule that comes with it is not optional: **never hold a borrow across an `await`, and never
-take a second borrow while one is live.** With a `RefCell` the second of those panics at the
-point of the mistake; with a `Mutex` it deadlocks, silently, somewhere else. That asymmetry is
+The rule that comes with it is not optional: **never hold a borrow across an `await`.** Take it,
+use it, drop it before the next suspension point. A second *exclusive* borrow while one is live
+panics at the mistake with a `RefCell` and deadlocks somewhere else with an `RwLock`, which is
 why the device clusters keep their `RefCell`s — a device is single-threaded anyway, and the
 single-threaded build is the one that finds the bug.

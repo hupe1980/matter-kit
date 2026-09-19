@@ -28,8 +28,12 @@ jobs:
       - run: cargo test --no-default-features
 
   features:
-    name: Feature powerset
+    name: Feature powerset ${{ matrix.partition }}/4
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -40,6 +44,18 @@ jobs:
       # `log` and `defmt` are mutually exclusive in practice (see the manifest), so pairing
       # them would double every other combination for a pair no device ships.
       #
+      # `default` is excluded because it is `["rustcrypto"]` and nothing else, so every
+      # combination containing it resolves to one already in the list with `rustcrypto` named
+      # directly. Dropping it removes 96 duplicate compilations of 288 and no coverage: the
+      # default build is what every other job here builds anyway.
+      #
+      # The remaining 192 are split four ways rather than shortened. `--depth 2` would cut them
+      # to 34 and would still catch most cfg mistakes — a missing gate usually needs one feature
+      # off and one on — but this crate has items gated on a *conjunction*
+      # (`all(rustcrypto, provisional)`), and those need three names in play before anything
+      # can be wrong. Partitioning keeps the whole set and spends four runners instead of one:
+      # 48 combinations each, about two minutes with the dependency cache warm.
+      #
       # Deliberately *without* `--no-dev-deps`. That flag rewrites `Cargo.toml` in place for
       # the duration of the run and restores it on exit — so an interrupted run (a timeout, a
       # cancelled job, a Ctrl-C on a developer's machine) leaves a manifest with no
@@ -48,7 +64,14 @@ jobs:
       # `--all-targets` does not build dev-dependencies, and the two this crate has — `hex`
       # and `hex-literal` — do not depend on `matter-kit`, so they cannot unify a feature
       # into the crate under test.
-      - run: cargo hack check --feature-powerset --mutually-exclusive-features log,defmt
+      # `--keep-going` because the interesting output of a broken powerset is *which*
+      # combinations broke: stopping at the first turns one run into one bisection step.
+      - run: |
+          cargo hack check --feature-powerset \
+            --mutually-exclusive-features log,defmt \
+            --exclude-features default \
+            --partition ${{ matrix.partition }}/4 \
+            --keep-going
 
   embedded:
     name: no_std targets
@@ -67,6 +90,28 @@ jobs:
       - run: cargo build --target ${{ matrix.target }}
       - run: cargo build --target ${{ matrix.target }} --features defmt
 
+  footprint:
+    name: Footprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: llvm-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: footprint
+      # Building for a bare-metal target proves the crate compiles for the part. It says
+      # nothing about whether it fits on one, and "fits" is the claim the README makes. So this
+      # links a whole light — an nRF52840's memory, `cortex-m-rt`'s entry point, endpoint 0's
+      # commissioning clusters and endpoint 1's On/Off, Identify, Groups and Scenes — and reads
+      # the sections out of the image.
+      #
+      # The budgets in the script are regression gates rather than specification limits: a
+      # change that costs ten kilobytes has to raise them deliberately.
+      - run: ./footprint/run.sh --top 20
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -83,12 +128,45 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       # `fuzz/` is a workspace of its own, so nothing above compiles a single line of it: the
-      # fuzz targets call this crate's API and drift out of step with it silently, and the
-      # only thing that used to notice was the nightly Fuzz job, fifteen minutes in. This is
-      # the same compile error thirteen seconds into a pull request. `cargo check` rather than
+      # fuzz targets call this crate's API and drift out of step with it silently. Without this
+      # the nightly Fuzz job is the only thing that notices, fifteen minutes in; here it is the
+      # same compile error thirteen seconds into a pull request. `cargo check` rather than
       # `cargo fuzz build` because type-checking needs neither nightly nor a sanitizer.
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo check --manifest-path fuzz/Cargo.toml --all-targets
+      # The architecture notes are not published, so a reference to one of their numbered
+      # decisions in published text points at something the reader cannot open — and reads as
+      # a citation, which is worse than no reference at all. They accumulate in rustdoc and in
+      # `Cargo.toml` unless something greps for them.
+      - name: No internal references in published text
+        run: |
+          if grep -rnE '\((D|R)[0-9]+(, ?(D|R)[0-9]+)*\)' \
+               Cargo.toml README.md site/content src --include='*.rs' --include='*.toml' \
+               --include='*.md' | grep -v 'clusters/generated'; then
+            echo "::error::a concepts/ decision or risk number appears in published text"
+            exit 1
+          fi
+
+  semver:
+    name: Semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-semver-checks
+      # The crate is published, so the question "is this release breaking?" has an answer that
+      # is not a matter of opinion. `cargo-semver-checks` compares the public API against the
+      # last version on crates.io and says which kind of bump the changes require; the policy
+      # it enforces is written down under `site/content/docs/stability.md`.
+      #
+      # It fails when the version has not been raised far enough for what changed, which is the
+      # only moment anybody would otherwise notice — after publishing.
+      #
+      # No `--release-type`: the manifest's version against the last published one is the
+      # comparison that matters, and 0.x's rule — a minor bump is the breaking one — is
+      # something the tool already knows and a flag would override.
+      - run: cargo semver-checks
 
   msrv:
     name: MSRV
@@ -189,8 +267,23 @@ jobs:
       #
       # Reaching a passing run took five defects that nothing else in this repository could
       # see, because everything else has matter-kit on both ends. The image is 1.6-era and
-      # also carries the SDK's 603 Python certification scripts, which `python.sh` runs.
+      # also carries the SDK's 618 Python certification scripts, which `python.sh` runs.
       - run: ./interop/chip/run.sh
+
+  chip-latest:
+    name: Interop (CHIP SDK, upstream tip — advisory)
+    runs-on: ubuntu-latest
+    # Not a gate. `chip` above runs a pinned digest so that a red run means *this* crate
+    # changed; this one runs whatever `:latest` has become, on the nightly schedule only, so
+    # that an upstream move is noticed rather than absorbed. A failure here is a signal to look,
+    # never a reason to block a pull request.
+    if: github.event_name == 'schedule'
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: CHIP_IMAGE=ghcr.io/matter-js/chip:latest ./interop/chip/run.sh
 
   harness:
     name: Interop (Test Harness cases)
@@ -199,7 +292,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The CSA Test Harness's own certification cases, out of the same image: 603 `TC_*.py`
+      # The CSA Test Harness's own certification cases, out of the same image: 618 `TC_*.py`
       # scripts, the `matter` package they import, and the PICS files. Each one commissions the
       # device itself, so §5.5 runs in full before the first assertion.
       #

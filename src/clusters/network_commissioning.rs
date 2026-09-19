@@ -1444,6 +1444,17 @@ fn write_connect_response(
 pub const SCAN_SCRATCH_BYTES: usize = 1024;
 
 impl<D: NetworkDriver, const N: usize> ClusterHandler for NetworkCommissioning<'_, D, N> {
+    /// The network list is the one thing the fail-safe stages that is not a fabric: §11.10.7.2.2
+    /// step 5 reverts it on expiry, and §11.10.7.6 makes it permanent on
+    /// `CommissioningComplete`. A node that never commits reverts to its *first* snapshot at
+    /// the next expiry, whenever that is.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        match event {
+            crate::im::Lifecycle::FailSafeExpired { .. } => self.on_fail_safe_expired(),
+            crate::im::Lifecycle::CommissioningComplete(_) => self.on_commissioning_complete(),
+            crate::im::Lifecycle::FabricRemoved(_) => {}
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

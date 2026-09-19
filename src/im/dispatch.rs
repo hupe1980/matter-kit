@@ -391,6 +391,18 @@ impl<const W: usize> Dispatcher<W> {
             scratch,
             buf,
         )?;
+        // §8.8.2.3's Invoke Response Generation, first bullet: "If the previous action in this
+        // transaction action is groupcast, this process and transaction terminate with no
+        // response." The commands have run — that is the whole point of a groupcast — and the
+        // answer goes nowhere.
+        //
+        // It is the same rule the write path obeys and the one with the louder failure: a
+        // groupcast reaches every member of the group at once, so a node that answers turns one
+        // multicast into as many unicast responses as there are lights in the room, all sent in
+        // the same instant, to a sender that is not waiting for any of them.
+        if request.groupcast {
+            return Ok(Served::Silent);
+        }
         Ok(Served::Reply {
             opcode: opcode::INVOKE_RESPONSE,
             len: bytes.len(),

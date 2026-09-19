@@ -7,7 +7,18 @@
 # Nothing here is specific to either; what differs between them is only what they run once the
 # device is up.
 
-IMAGE="${CHIP_IMAGE:-ghcr.io/matter-js/chip:latest}"
+# The reference implementation, pinned by digest rather than by `:latest`.
+#
+# `:latest` moved underneath this harness once already — a pull on 2026-09-19 carried 618
+# certification cases where 603 had been recorded — and a gate that can change between two runs
+# of the same commit cannot tell a regression from an upstream edit. Moving the pin is a commit
+# with its own diff and its own green run, exactly like `interop/`'s `=0.3.0` pin on rs-matter.
+#
+# This digest is the multi-arch manifest list, so it resolves on arm64 and amd64 alike. To see
+# what upstream has become without changing the gate:
+#
+#   CHIP_IMAGE=ghcr.io/matter-js/chip:latest ./interop/chip/run.sh
+IMAGE="${CHIP_IMAGE:-ghcr.io/matter-js/chip@sha256:c69662de209a062b344c97cc8622a6147271c96f8887e747b905fab4ffb381de}"
 NET="${MATTER_NET:-matter-kit-interop}"
 SUBNET="fd00:1234:5678::/64"
 DEVICE_IP="fd00:1234:5678::2"

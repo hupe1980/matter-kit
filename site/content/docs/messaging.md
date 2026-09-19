@@ -18,7 +18,10 @@ let mut stack = Messaging::<MyConfig, SESSIONS, EXCHANGES>::new(
 match stack.receive(&mut datagram, from, now)? {
     Received::Message { exchange, header, payload, needs_ack } => { /* dispatch */ }
     Received::Duplicate { exchange, needs_ack } => { /* acknowledge, do not act */ }
+    Received::Group { session_id, from } => { /* route by group key, answer nothing */ }
+    Received::SessionClosed { session } => { /* the peer tore it down (§4.11.1.4) */ }
     Received::Acknowledged { .. } => {}
+    _ => {}   // `Received` is `#[non_exhaustive]`
 }
 
 // Outbound.

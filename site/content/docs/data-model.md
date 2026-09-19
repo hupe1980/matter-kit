@@ -267,8 +267,8 @@ Three things about this are easy to get wrong, and all three are load-bearing:
   on instead of retrying it forever.
 
 `Server::serve` remains for reads known to be small; it is `serve_chunk` with a cursor thrown
-away. Subscriptions chunk the same way through `prime_chunk` and `report_chunk`, because a
-priming report is a whole read of everything the subscription covers.
+away. Subscriptions chunk the same way, through `prime` and `report_chunk`, because a priming
+report is a whole read of everything the subscription covers.
 
 ## Reading a chunked report back
 

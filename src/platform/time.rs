@@ -126,7 +126,7 @@ impl Instant {
         self.0
     }
 
-    /// As milliseconds since the origin — Core §7.18.2.6's `systime-ms`.
+    /// As milliseconds since the origin — Core §7.19.2.7's `systime-ms`.
     ///
     /// Truncating, like every other reading of a coarser clock from a finer one. The
     /// specification's own use of it is a client correlating its clock with the node's

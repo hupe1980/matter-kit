@@ -524,6 +524,14 @@ fn decode_target(reader: &mut TlvReader<'_>) -> Result<Target, Status> {
 impl<C: Config, const N: usize, const S: usize, const T: usize> ClusterHandler
     for AccessControl<'_, C, N, S, T>
 {
+    /// §9.10.5.3: every ACL entry carries a `FabricIndex`, and §11.18.6.12 removes them with
+    /// the fabric. An entry that survives grants the *next* holder of that index whatever it
+    /// granted — the one case in this file that is an escalation rather than a leak.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.acl.borrow_mut().remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

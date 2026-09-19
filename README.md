@@ -3,6 +3,8 @@
 A [Matter](https://csa-iot.org/all-solutions/matter/) implementation in Rust: one crate,
 `no_std`, no allocation, and no runtime of its own.
 
+[![Crates.io](https://img.shields.io/crates/v/matter-kit.svg)](https://crates.io/crates/matter-kit)
+[![docs.rs](https://img.shields.io/docsrs/matter-kit)](https://docs.rs/matter-kit)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Docs](https://img.shields.io/badge/docs-hupe1980.github.io%2Fmatter--kit-0b6bcb.svg)](https://hupe1980.github.io/matter-kit)
 
@@ -14,6 +16,11 @@ A [Matter](https://csa-iot.org/all-solutions/matter/) implementation in Rust: on
 > pass** against it. The 1.6 cluster library is generated from the CSA data model with its
 > conformance rules. What is missing is most of the application clusters' *behaviour*. See
 > [Status](#status).
+
+```sh
+cargo add matter-kit                    # no_std, no alloc, UDP + MRP
+cargo add matter-kit --features std     # sockets, mDNS, a file-backed key-value store
+```
 
 ## 🏠 What Matter is, and why this exists
 
@@ -63,9 +70,22 @@ Cargo features cannot do this: they are global and additive, so two crates in on
 that want different sizes silently get the union, and nothing checks the result against the
 specification.
 
+And the sizes are visible in the image rather than in a design note. `./footprint/run.sh` links
+a whole light for an nRF52840 and reads the sections out of it: **88 KiB of flash and 39 KiB of
+RAM**, of which 14 KiB is fifteen subscriptions and 9 KiB is five fabrics. Change `Config` and
+watch the RAM move. There is no radio in that image, so it measures this crate and not a
+finished product.
+
 **⚙️ No runtime is chosen for you.** The crate is `async` over `core::future` and reaches the
-outside world through small traits — sockets, timers, randomness, storage. Embassy and
-Tokio appear in examples, never in the dependency tree.
+outside world through small traits — sockets, timers, randomness, storage. No executor crate
+is in the dependency tree at all; the examples run on a `block_on` of their own.
+
+**🧹 A fabric leaves, and nothing of it stays.** `RemoveFabric` is one sentence in the
+specification — "SHALL remove all associated data" — that reaches fourteen tables owned by ten
+clusters. Here it is one call, `handler.on_lifecycle(Lifecycle::FabricRemoved(index))`,
+delivered to every cluster a device serves; adding a cluster adds it to that fan-out. Fabric
+indices are reused, so an entry that outlives its fabric is inherited by whoever gets that index
+next — which for an access-control entry is an administrator nobody granted.
 
 **🛡️ Nothing panics on network input.** `unwrap`, `expect`, `panic!` and slice indexing are
 denied crate-wide; every parser returns an error. Resource exhaustion is a value, so a
@@ -76,69 +96,58 @@ device that runs out of exchanges answers `BUSY` rather than aborting.
 ## 📊 Status
 
 Every layer below is built and tested against the sections that define it. The full
-breakdown — sixty-odd rows, each citing its specification section — is on the
+breakdown — eighty-odd rows, each citing its specification section — is on the
 [status page](https://hupe1980.github.io/matter-kit/docs/status/).
 
 | Area | What is built | 1.6 |
 |---|---|---|
 | Wire and message layer | TLV, the message frame, counters and the replay window, security and privacy, exchanges and MRP | Appendix A, §4.4–§4.12 |
 | Transports | UDP, TCP with §4.5 stream framing, BLE/BTP, PAFTP over Wi-Fi Public Action Frames, NFC/NTL | §4.5, §4.15, §4.19–§4.21 |
-| Secure channel | the ch. 3 cryptosuite, SPAKE2+, PASE, CASE with resumption, secure sessions, StatusReport | ch. 3, §4.11–§4.14 |
-| Groupcast | operational group keys and epoch rotation, group sessions, the peer table, MCSP | §4.16–§4.18 |
+| Secure channel | the ch. 3 cryptosuite, SPAKE2+, PASE, CASE, secure sessions, StatusReport — and `sc::Channel`, which owns §5.5's rules around them: one handshake at a time, sixty seconds, twenty failures, and the session each produces | ch. 3, §4.11–§4.14, §5.5 |
+| Groupcast | operational group keys and epoch rotation, group sessions, the peer table, MCSP — and the receive path a device needs: join the group's multicast address, try every candidate key, act on the command and answer nothing | §4.16–§4.18, §8.8.2.3 |
 | Credentials | Matter TLV certificates and exact X.509 regeneration, the DAC/PAI/PAA chain, the Certification Declaration, NOCSR, a certificate authority | ch. 6 |
 | Commissioning | onboarding payloads, the fail-safe, both sides of §5.5's flow and its rules on admitting a PASE request, Network Recovery, Joint Fabric and Fabric Synchronization | ch. 5, ch. 12 |
 | Interaction model | all ten messages and sixteen information blocks, Read/Write/Invoke, subscriptions and the reporting engine, events, atomic writes, cluster data versions, chunking both ways | ch. 7, ch. 8, ch. 10 |
 | Access control | §6.6.6's algorithm clause by clause — CATs, fabric isolation, the two-stage check | §6.6 |
+| Node lifetime | session eviction with the `CloseSession` report it owes, a session's exchanges dying with it, and fabric removal reaching every cluster | §4.11.1.1, §4.13.3.1, §11.18.6.12 |
 | Exchanges | the table, MRP's backoff curve, §4.10.3.1's protocol registration and §4.10.5.2's three rules for an unsolicited message — so a stranger cannot fill a fixed-capacity table and end session establishment | §4.10, §4.12 |
 | Discovery | DNS-SD records and TXT keys, a responder, RFC 6762's probe/announce/conflict schedule | §4.3 |
 | Large data | BDX and both OTA cluster halves, TLS Certificate and Client Management | §11.20, §11.22, ch. 14 |
-| Clusters | the generated library with its conformance and TLV types, and thirty-four hand-written cluster modules — On/Off, Level Control, Groups, Scenes, Mode Base, the energy clusters, the diagnostics clusters including §11.16's Ethernet Network Diagnostics, the commissioning clusters | Application Cluster, Device Library |
+| Clusters | the generated library with its conformance and TLV types, and thirty-six hand-written cluster modules — On/Off, Level Control, Groups, Scenes, Mode Base, the energy clusters, all three network diagnostics clusters over driver traits, the commissioning clusters | Application Cluster, Device Library |
 
 **Not yet written:** most of the application clusters' *behaviour* behind the generated
 descriptors, device attestation revocation and the DCL, the per-chip radio drivers, and the
 typed client layer over the generated types.
 
-1745 tests; twenty-seven fuzz targets clean; builds for `thumbv7em-none-eabihf` and
-`riscv32imac-unknown-none-elf`; the feature powerset checked in full.
+1794 tests; twenty-seven fuzz targets clean; builds for `thumbv7em-none-eabihf` and
+`riscv32imac-unknown-none-elf`, and **links** for the first of them into 88 KiB of flash and
+39 KiB of RAM; the feature powerset checked in full.
 
-And one check worth more than the rest: `./interop/chip/run.sh` has the CHIP SDK's own
-`chip-tool` — the controller every certified Matter product is paired by — commission
-`examples/light` through the whole of Core §5.5, ending `Device commissioning completed with
-success`. PASE, device attestation **verified rather than bypassed**, the CSR and `AddNOC`,
-then mDNS resolution, CASE on the identity just issued, and `CommissioningComplete` over the
-operational session. Both ends in containers on an IPv6 network — no hardware, no radio, no
-C++ toolchain.
-
-The same container carries the CSA Test Harness's own **603 certification cases**, and
-`./interop/chip/python.sh TC_CGEN_2_1` runs them against the example — each one commissioning
-the device itself before its first assertion. **Eleven pass**: `TC_CGEN_2_1`, `TC_OPCREDS_3_1`,
-`TC_ACL_2_2`, `TC_ACL_2_4`, `TC_ACL_2_6`, `TC_ACL_2_10`, `TC_IDM_1_2`, `TC_IDM_1_4`,
-`TC_IDM_2_2`, `TC_IDM_2_3` and `TC_IDM_4_2` — `TC_OPCREDS_3_1` across all eighty-five of its
-steps, commissioning a second and a third fabric, rolling one back and reconnecting over PASE.
+And one check worth more than the rest, because it is the only one without this crate on both
+ends: `./interop/chip/run.sh` has the CHIP SDK's own `chip-tool` — the controller every
+certified Matter product is paired by — commission `examples/light` through the whole of Core
+§5.5, with device attestation **verified rather than bypassed**. The same container carries the
+CSA Test Harness's own **618 certification cases**, and `./interop/chip/python.sh` runs them
+against the example; **eleven pass**, `TC_OPCREDS_3_1` across all eighty-five of its steps.
+Both ends in containers on an IPv6 network — no hardware, no radio, no C++ toolchain. The
+[status page](https://hupe1980.github.io/matter-kit/docs/status/) names every case.
 
 ## 🔌 The wire format
 
 Every byte Matter puts on the wire above the message header is TLV (Core Appendix A).
 
 ```rust
-use matter_kit::tlv::{Pretty, Tag, TlvReader, TlvWriter};
+use matter_kit::tlv::{Pretty, TlvReader};
 
 // Core Table 128's example: { 0 = 42, 1 = -17 }
 let bytes = [0x15, 0x20, 0x00, 0x2a, 0x20, 0x01, 0xef, 0x18];
 TlvReader::validate(&bytes)?;
 assert_eq!(format!("{}", Pretty(&bytes)), "{0 = 42, 1 = -17}");
-
-// The writer refuses to produce invalid TLV: an anonymous member of a structure, a
-// tagged member of an array or an unbalanced container are errors at the call.
-let mut buf = [0u8; 32];
-let mut w = TlvWriter::new(&mut buf);
-w.start_structure(Tag::Anonymous)?;
-w.signed(Tag::Context(0), 42)?;
-w.signed(Tag::Context(1), -17)?;
-w.end_container()?;
-assert_eq!(w.finish()?, &bytes);
 # Ok::<(), matter_kit::Error>(())
 ```
+
+`TlvWriter` is the other half, and it refuses to produce invalid TLV: an anonymous member of a
+structure, a tagged member of an array or an unbalanced container are errors at the call.
 
 ## 🧩 Serving a node
 
@@ -181,20 +190,15 @@ that jumps to the next deadline, and loss, duplication and jitter you set per te
 
 ```rust
 use matter_kit::platform::sim::{Impairment, SimNet, block_on};
-use matter_kit::platform::{Timer, Duration};
+use matter_kit::platform::{Duration, Timer};
 
 let net = SimNet::new(42);              // seeded: same run, same result, every time
 net.impair(Impairment::lossy(30));      // drop three datagrams in ten
 
 let start = Timer::now(&net);
-block_on(&net, async {
-    net.sleep(Duration::from_secs(3600)).await;   // returns immediately
-});
-// An hour of virtual time has passed and no wall-clock time has.
-assert_eq!(
-    Timer::now(&net).saturating_duration_since(start),
-    Duration::from_secs(3600)
-);
+block_on(&net, async { net.sleep(Duration::from_secs(3600)).await });
+// An hour of virtual time has passed, and no wall-clock time has.
+assert_eq!(Timer::now(&net).saturating_duration_since(start), Duration::from_secs(3600));
 ```
 
 ## 🔨 Building
@@ -231,6 +235,11 @@ drives MRP over a lossy simulated link.
 
 - **[Guides and reference](https://hupe1980.github.io/matter-kit)** — what Matter is, how to
   serve a node, commissioning, discovery, and how a protocol made of timers gets tested.
+- **[Stability](https://hupe1980.github.io/matter-kit/docs/stability/)** — what a `0.x`
+  dependency promises, which three surfaces cost you work when they move, and the deprecation
+  rule. `cargo-semver-checks` enforces it in CI.
+- **[CHANGELOG.md](CHANGELOG.md)** — what moved between releases, and what to change if you
+  are on the previous one.
 - **[API reference](https://docs.rs/matter-kit)** — every module documents the rules it
   implements against the section that states them.
 

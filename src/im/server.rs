@@ -153,6 +153,54 @@ impl WriteOp {
     }
 }
 
+/// Something that happened to the **node**, which every cluster holding state scoped to it
+/// has to react to.
+///
+/// Read, write and invoke are driven by a peer; these three are driven by the node's own
+/// life, and every one of them is a rule the specification states once and expects every
+/// cluster to obey:
+///
+/// * §11.18.6.12 — `RemoveFabric` "SHALL remove all associated data" of the fabric. All of
+///   it: scenes, groups, bindings, ICD registrations, OTA providers, TLS endpoints, group
+///   keys, access control entries. A cluster that keeps one entry hands it to whoever is
+///   assigned that fabric index next.
+/// * §11.10.7.2.2 — an expired fail-safe rolls back what the abandoned commissioner staged.
+/// * §11.10.7.6 — `CommissioningComplete` makes it permanent.
+///
+/// Delivered to *every* member of a handler tuple rather than routed by cluster id, because
+/// unlike a path this is not addressed to one cluster: it is a fact about the node that all
+/// of them are downstream of. Which is also why it is a method on [`ClusterHandler`] and not
+/// a separate trait — a device's cluster tuple is the one place that already names every
+/// cluster it has, so the fan-out cannot be missed by forgetting to register something. The
+/// CHIP SDK registers each cluster with `FabricTable::AddFabricDelegate`, and its own issue
+/// tracker records what an unregistered cluster costs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Lifecycle {
+    /// A fabric was removed, or rolled back before it was ever complete (§11.18.6.12,
+    /// §11.10.7.2.2 step 3).
+    ///
+    /// Every cluster forgets everything scoped to that index. It is not "the accessing
+    /// fabric": an administrator may remove another's, and a rollback removes one nobody was
+    /// speaking on.
+    FabricRemoved(crate::msg::FabricIndex),
+    /// The fail-safe expired without `CommissioningComplete` (§11.10.7.2.2).
+    ///
+    /// A cluster that staged something reverts it. `fabric` is the fail-safe's own fabric,
+    /// when it had one — a fail-safe armed over PASE before `AddNOC` has none.
+    FailSafeExpired {
+        /// The fabric the fail-safe was armed on, if it had reached one.
+        fabric: Option<crate::msg::FabricIndex>,
+    },
+    /// `CommissioningComplete` succeeded on `fabric` (§11.10.7.6).
+    ///
+    /// Whatever was staged under the fail-safe is now the device's permanent state, so the
+    /// snapshot it would have been rolled back to is dropped. A cluster that never drops it
+    /// reverts to *that* snapshot at the next expiry, however many commissionings later —
+    /// which is how a device loses the network credentials it has been using for a month.
+    CommissioningComplete(crate::msg::FabricIndex),
+}
+
 /// What a device's clusters actually do.
 ///
 /// One trait rather than three, because a device has one cluster implementation table and
@@ -238,6 +286,14 @@ pub trait ClusterHandler {
     ) -> core::result::Result<Option<crate::im::CommandId>, StatusIb> {
         Err(Status::UnsupportedCommand.into())
     }
+
+    /// Reacts to something that happened to the node (see [`Lifecycle`]).
+    ///
+    /// The default does nothing, which is right for every cluster whose state is not scoped
+    /// to a fabric and stages nothing under the fail-safe — most of them. There is no return
+    /// value: nothing here can fail in a way a caller could act on, and a cluster that could
+    /// not forget a fabric would have no way to keep it either.
+    fn on_lifecycle(&self, _event: Lifecycle) {}
 }
 
 /// A shared reference to a handler is a handler.
@@ -279,6 +335,10 @@ impl<T: ClusterHandler + ?Sized> ClusterHandler for &T {
         tag: Tag,
     ) -> core::result::Result<Option<crate::im::CommandId>, StatusIb> {
         (**self).invoke(resolved, fields, ctx, w, tag)
+    }
+
+    fn on_lifecycle(&self, event: Lifecycle) {
+        (**self).on_lifecycle(event);
     }
 }
 
@@ -377,7 +437,7 @@ pub struct InteractionContext<'a> {
     /// the way `timed` and `atomic` are derived. `None` means the caller did not compute one,
     /// and a cluster that needs it must then take the cautious branch.
     pub privilege: Option<Privilege>,
-    /// The group this action was addressed to, when it arrived as a groupcast (§4.15.3).
+    /// The group this action was addressed to, when it arrived as a groupcast (§4.16.1).
     ///
     /// `None` is a unicast. Several clusters branch on this rather than on anything in the
     /// payload: §1.3.7.1.2 says the Groups cluster "SHALL NOT generate an AddGroupResponse
@@ -457,7 +517,7 @@ impl<'a> InteractionContext<'a> {
         self
     }
 
-    /// Marks the action as a groupcast addressed to `group` (§4.15.3).
+    /// Marks the action as a groupcast addressed to `group` (§4.16.1).
     #[must_use]
     pub const fn with_group(mut self, group: crate::msg::GroupId) -> Self {
         self.group = Some(group);
@@ -2101,8 +2161,7 @@ impl<A: AccessControl, H: ClusterHandler> Server<'_, A, H> {
         // command succeeds. Deliberately conservative: §7.10.3 sets a floor, and a version that
         // moves when nothing changed costs a client one re-read, while a version that fails to
         // move when something did is a wrong answer the client cannot detect. The alternative —
-        // each cluster announcing its own changes — is the one every cluster forgets, and this
-        // document has three decisions about exactly that failure (D77, D78, D79). A cluster
+        // each cluster announcing its own changes — is the one every cluster forgets. A cluster
         // that changes an attribute with no command behind it, a sensor reading or a switch
         // somebody pressed, still calls [`DataVersionSource::touch`] itself; there is nothing
         // here for the server to hook.
@@ -2294,24 +2353,6 @@ impl<A: AccessControl, H: ClusterHandler> Server<'_, A, H> {
         buf: &'b mut [u8],
     ) -> Result<(&'b [u8], ReadOutcome)> {
         self.serve(paths, ctx, Some(subscription_id), scratch, buf)
-    }
-
-    /// The priming report, chunked (§10.2.3).
-    ///
-    /// A priming report is a whole read of everything the subscription covers, so it
-    /// overflows one message for exactly the reasons an ordinary wildcard read does — and a
-    /// subscription that cannot be primed cannot be established at all. Drive it the way
-    /// [`Server::serve_chunk`] is driven, until the cursor is done.
-    pub fn prime_chunk<'b>(
-        &self,
-        subscription_id: u32,
-        paths: impl IntoIterator<Item = Result<AttributePath>>,
-        ctx: &InteractionContext<'_>,
-        cursor: &mut ReadCursor,
-        scratch: &mut [u8],
-        buf: &'b mut [u8],
-    ) -> Result<(&'b [u8], ReadOutcome)> {
-        self.serve_chunk(paths, ctx, Some(subscription_id), cursor, scratch, buf)
     }
 
     /// Serves a subscription's periodic report (§8.6).

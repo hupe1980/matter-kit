@@ -454,6 +454,13 @@ impl<'a, H: OtaRequestorHooks, const N: usize> OtaRequestor<'a, H, N> {
 }
 
 impl<H: OtaRequestorHooks, const N: usize> ClusterHandler for OtaRequestor<'_, H, N> {
+    /// §11.20.7.5: `DefaultOTAProviders` is fabric-scoped, so a removed fabric's provider
+    /// goes with it — otherwise this node would still ask it for firmware.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

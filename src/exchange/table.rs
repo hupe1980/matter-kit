@@ -389,21 +389,6 @@ impl<C: Config, const N: usize> ExchangeTable<C, N> {
         self.find(ExchangeKey { session, id, role })
     }
 
-    /// Finds the exchange an arriving message belongs to, mutably.
-    pub fn find_for_message_mut(
-        &mut self,
-        session: SessionId,
-        id: ExchangeId,
-        from_initiator: bool,
-    ) -> Option<&mut Exchange> {
-        let role = if from_initiator {
-            Role::Responder
-        } else {
-            Role::Initiator
-        };
-        self.find_mut(ExchangeKey { session, id, role })
-    }
-
     /// Closes an exchange, returning whether it was open.
     pub fn close(&mut self, key: ExchangeKey) -> bool {
         let Some(i) = self.open.iter().position(|e| e.key == key) else {

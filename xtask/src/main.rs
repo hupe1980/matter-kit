@@ -53,6 +53,8 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+mod api;
+mod cite;
 mod emit;
 mod ident;
 mod model;
@@ -70,6 +72,10 @@ enum Command {
     Check { dm: PathBuf, out: PathBuf },
     /// Print what the data model contains and what this tool made of it.
     Report { dm: PathBuf },
+    /// List the public functions nothing calls.
+    Api { strict: bool },
+    /// Check every `§` citation and quotation against the specification PDFs.
+    Cite { spec: PathBuf, strict: bool },
 }
 
 fn main() -> ExitCode {
@@ -93,6 +99,8 @@ usage:
   cargo xtask clusters [--dm <dir>] [--out <dir>]   generate src/clusters/generated/
   cargo xtask check    [--dm <dir>] [--out <dir>]   regenerate and fail on any diff
   cargo xtask report   [--dm <dir>]                 what the data model contains
+  cargo xtask api      [--strict]                   public functions nothing calls
+  cargo xtask cite     [--spec <dir>] [--strict]    every § citation and quotation
 
   --dm   the CSA data model directory, holding clusters/ and device_types/
          (default: data_model/1.6)
@@ -110,11 +118,18 @@ fn parse_args() -> Result<Command, String> {
     let verb = args.next().ok_or("no subcommand")?;
     let mut dm = PathBuf::from("data_model/1.6");
     let mut out = PathBuf::from("src/clusters/generated");
+    let mut spec = PathBuf::from("concepts/references/1.6");
+    let mut strict = false;
     while let Some(flag) = args.next() {
+        if flag == "--strict" {
+            strict = true;
+            continue;
+        }
         let value = args.next().ok_or(format!("{flag} needs a value"))?;
         match flag.as_str() {
             "--dm" => dm = PathBuf::from(value),
             "--out" => out = PathBuf::from(value),
+            "--spec" => spec = PathBuf::from(value),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -122,6 +137,8 @@ fn parse_args() -> Result<Command, String> {
         "clusters" | "generate" => Ok(Command::Generate { dm, out }),
         "check" => Ok(Command::Check { dm, out }),
         "report" => Ok(Command::Report { dm }),
+        "api" => Ok(Command::Api { strict }),
+        "cite" => Ok(Command::Cite { spec, strict }),
         other => Err(format!("unknown subcommand {other}")),
     }
 }
@@ -165,6 +182,26 @@ fn run(command: Command) -> Result<(), String> {
         Command::Report { dm } => {
             let model = load(&dm)?;
             report(&model);
+            Ok(())
+        }
+        Command::Cite { spec, strict } => {
+            let report = cite::sweep(Path::new("."), &spec, Path::new("target/xtask-cite"))?;
+            cite::print(&report);
+            let found = report.sections.len() + report.quotations.len();
+            if strict && found > 0 {
+                return Err(format!("{found} citations or quotations do not check out"));
+            }
+            Ok(())
+        }
+        Command::Api { strict } => {
+            let report = api::sweep(Path::new("."));
+            api::print(&report);
+            if strict && !report.uncalled.is_empty() {
+                return Err(format!(
+                    "{} public functions are called by nothing",
+                    report.uncalled.len()
+                ));
+            }
             Ok(())
         }
     }

@@ -4,7 +4,7 @@ description = "A Matter 1.6 protocol implementation in Rust: one crate, no_std, 
 template = "index.html"
 
 [extra]
-tagline = "Matter is the CSA smart-home standard behind Apple Home, Google Home, Alexa and SmartThings. matter-kit implements specification 1.6 in a single Rust crate that runs on a 256 KB microcontroller and brings no runtime of its own."
+tagline = "Matter is the CSA smart-home standard behind Apple Home, Google Home, Alexa and SmartThings. matter-kit implements specification 1.6 in a single Rust crate that links into 88 KiB of flash and 39 KiB of RAM on an nRF52840 and brings no runtime of its own."
 status_note = "Under construction and pre-1.0. The CHIP SDK's own chip-tool commissions the example device end to end with attestation verified, and eleven of the CSA Test Harness's certification cases pass against it. A device can be commissioned over IPv6, Bluetooth LE, Wi-Fi PAF or NFC, answer Reads, Writes and Invokes, hold subscriptions, take part in groupcast, and move a firmware image over TCP. Most of the application clusters' behaviour is what is left."
 
 [[extra.pillars]]

@@ -713,7 +713,7 @@ impl ClusterHandler for GeneralCommissioning<'_> {
                     ctx.fabric_index,
                     // §11.10.7.2's window rule turns on "the command was received over a CASE
                     // session". An accessing fabric is exactly what a CASE session has and a
-                    // PASE session does not (§4.13.2.6).
+                    // PASE session does not (§6.6.6.3).
                     ctx.fabric_index.is_some(),
                     ctx.now,
                 );

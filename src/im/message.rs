@@ -15,8 +15,8 @@
 //!
 //! # `InteractionModelRevision` is not optional
 //!
-//! §10.2.2.2: "All action messages defined in Section 10.7 SHALL include these tagged
-//! fields", and the field is context tag `0xFF`. It is written on every message here. On the
+//! §10.2.2.2 requires the interaction model's ten messages to "include these tagged fields",
+//! and the field is context tag `0xFF`. It is written on every message here. On the
 //! way in it is accepted as absent, because §8.1.1 has revisions going back to 10 and a peer
 //! that omits it is old rather than malformed.
 
@@ -394,10 +394,10 @@ where
 /// answer with a `MaxInterval` of its own inside the `SubscribeResponse`, and a client that
 /// assumed its ceiling had been honoured would call a live subscription dead.
 ///
-/// `keep_subscriptions` is the one field with teeth. §8.5.2.3: false "SHALL be treated as a
-/// request to terminate all existing subscriptions" from this subscriber — which is what a
-/// controller wants after a restart, and exactly what it does not want when adding a second
-/// subscription to a node it is already watching.
+/// `keep_subscriptions` is the one field with teeth. §8.5.2.3: "If KeepSubscriptions is FALSE,
+/// all existing or pending subscriptions on the publisher for this subscriber SHALL be
+/// terminated." — which is what a controller wants after a restart, and exactly what it does
+/// not want when adding a second subscription to a node it is already watching.
 pub fn encode_subscribe_request<A, E>(
     buf: &mut [u8],
     attribute_paths: A,

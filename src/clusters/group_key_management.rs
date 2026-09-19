@@ -202,6 +202,13 @@ fn to_key_set(
 impl<T: GroupTable, const K: usize, const M: usize> ClusterHandler
     for GroupKeyManagement<'_, T, K, M>
 {
+    /// §11.2.7.4: a fabric's group keys go with the fabric. Leaving them behind leaves key
+    /// material for a fabric this node is no longer on — the IPK included.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.keys.borrow_mut().remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

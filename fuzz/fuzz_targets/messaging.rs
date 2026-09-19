@@ -78,6 +78,13 @@ fuzz_target!(|data: &[u8]| {
                 );
             }
             Ok(Received::Acknowledged { .. }) | Err(_) => {}
+            // §4.16: a group datagram is handed back rather than refused, and carries no
+            // session — which is the property this arm asserts by being separate from the one
+            // above, where a session id is checked.
+            Ok(Received::Group { .. }) => {}
+            // §4.11.1.4's close is impossible here: it is refused on the unsecured session,
+            // and no secure session exists for a fuzzed datagram to close (property 2).
+            Ok(other) => panic!("unexpected reception with no session installed: {other:?}"),
         }
 
         // Property 2.

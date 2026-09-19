@@ -74,7 +74,7 @@ pub struct AttributePath {
     pub attribute: Option<AttributeId>,
     /// `ListIndex [5]` — only meaningful when `attribute` is present.
     pub list_index: Option<ListIndex>,
-    /// `WildcardPathFlags [6]` (§10.6.2.6), which narrows what a wildcard expands to.
+    /// `WildcardPathFlags [6]` (§10.6.2, defined in §2.13.2), which narrows what a wildcard expands to.
     pub wildcard_path_flags: Option<WildcardPathFlags>,
     /// `WildcardFilterConfigurationVersion [7]`, added in interaction model revision 13.
     pub wildcard_filter_configuration_version: Option<u32>,
@@ -82,7 +82,7 @@ pub struct AttributePath {
 
 bitflags::bitflags! {
     /// `WildcardPathFlags` — which kinds of attribute a wildcard expansion skips
-    /// (§10.6.2.6).
+    /// (§2.13.2).
     ///
     /// A client that only wants a device's own state can ask a wildcard not to expand into
     /// the global attributes every cluster carries, which is most of what a naive wildcard

@@ -16,6 +16,16 @@
 //! through every generic in the crate, and the specification's minima are `const`
 //! assertions that fail the build rather than the certification laboratory.
 //!
+//! **Every constant here is read by the crate.** A sizing knob nothing reads is worse than
+//! no knob at all: it reads as a promise, it can carry an assertion that looks like
+//! enforcement, and the table it claims to size is whatever length somebody else picked. So
+//! `Config` carries what the protocol core allocates — fabrics, sessions, exchanges,
+//! subscriptions, access control — and no more. Capacities that belong to one instance of one
+//! table are const parameters on that table (`GroupKeys<K, M>`, `SceneTable<N, EFS, F>`,
+//! `Binding<C, N>`), chosen where it is constructed, because that is where the device knows
+//! how many it wants. `GROUPS` and `GROUP_KEYS` stay because §2.11.1.2's per-fabric minima
+//! are checked against them and a device passes them straight to those tables.
+//!
 //! ```
 //! use matter_kit::Config;
 //!
@@ -43,7 +53,6 @@
 //! | `SUB_PATHS` | at least 3 per subscription | §2.11.2.2 |
 //! | `READ_PATHS` | at least 9 | §2.11.2.1 |
 //! | `EXCHANGES_PER_SESSION` | at least 1 | — |
-//! | `PACKET_BUFS` | at least 2 — one to receive into, one to retransmit from | — |
 //!
 //! The assertions are in [`assert_valid`], which every generic entry point in the crate
 //! instantiates. A `Config` that breaks a rule therefore fails to compile at the first
@@ -61,11 +70,6 @@ pub trait Config {
     /// a node that supports fewer than five cannot be commissioned into the number of
     /// ecosystems the specification requires.
     const FABRICS: usize = 5;
-
-    /// How many endpoints the node can present, including endpoint 0.
-    ///
-    /// A bridge grows this: each bridged device is at least one endpoint.
-    const ENDPOINTS: usize = 8;
 
     /// How many secure sessions can exist at once, across all fabrics.
     ///
@@ -151,15 +155,6 @@ pub trait Config {
     /// Core §2.11.1.2: "at least three group keys per fabric".
     const GROUP_KEYS: usize = 3 * Self::FABRICS;
 
-    /// How many octets of event ring buffer to keep, per priority.
-    const EVENT_BUF_BYTES: usize = 1024;
-
-    /// How many packet buffers the node owns.
-    ///
-    /// Each is [`MAX_UDP_MESSAGE`] octets — the IPv6 minimum MTU of Core §4.4.4 — so this
-    /// is the single largest term in the node's memory budget.
-    const PACKET_BUFS: usize = 4;
-
     /// The largest message the node will accept over a stream transport.
     ///
     /// Core §4.15.2.3 calls this the "Maximum Message Size", and a peer that announces a
@@ -168,21 +163,6 @@ pub trait Config {
     /// "The system platform MAY configure a Maximum Message Size for the payload that it is
     /// capable of receiving", so a device that cannot spare 64 KiB says so here.
     const MAX_TCP_MSG: usize = 64 * 1024;
-
-    /// How many BTP (Bluetooth transport) sessions can be open at once.
-    const BTP_SESSIONS: usize = 1;
-
-    /// The largest blob the key-value store must be able to hold.
-    const KV_BLOB_MAX: usize = 4096;
-
-    /// How many resolved addresses to remember per peer when dialling.
-    const RESOLVE_CANDIDATES: usize = 4;
-
-    /// How many messages to remember per session for duplicate detection.
-    ///
-    /// Core §4.6.6's message reception state; the window has to be at least wide enough
-    /// to absorb the reordering a network produces.
-    const REPLAY_WINDOW: usize = 32;
 }
 
 /// A device-sized profile that satisfies every minimum: five fabrics, sixteen sessions,
@@ -240,10 +220,6 @@ impl<C: Config> AssertValid<C> {
             "Config::FABRICS: Core §11.18.5.3 constrains SupportedFabrics to 5..=254"
         );
         assert!(
-            C::ENDPOINTS >= 1,
-            "Config::ENDPOINTS: endpoint 0 is the root node (Core §2.10)"
-        );
-        assert!(
             C::ACL_ENTRIES >= 4 * C::FABRICS,
             "Config::ACL_ENTRIES: Core §2.11.1.1 requires at least 4 entries per fabric"
         );
@@ -278,14 +254,6 @@ impl<C: Config> AssertValid<C> {
         assert!(
             C::EXCHANGES_PER_SESSION >= 1,
             "Config::EXCHANGES_PER_SESSION: a session with no exchange can do nothing"
-        );
-        assert!(
-            C::PACKET_BUFS >= 2,
-            "Config::PACKET_BUFS: one buffer to receive into and one to retransmit from"
-        );
-        assert!(
-            C::REPLAY_WINDOW >= 1,
-            "Config::REPLAY_WINDOW: Core §4.6.6 requires message reception state"
         );
     };
 }

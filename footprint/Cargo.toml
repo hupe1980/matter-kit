@@ -1,0 +1,34 @@
+# Not a workspace member: this crate is built for a bare-metal target with a linker script, and
+# a member of the main workspace would drag that configuration into every ordinary `cargo build`.
+# `fuzz/` and `interop/` are separate for the same reason.
+# Its own workspace, like `fuzz/` and `interop/`.
+[workspace]
+
+[package]
+name = "matter-kit-footprint"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cortex-m-rt = "0.7"
+# The node's tables go in `static`s, as they do in real firmware — which is also the only way
+# the linker can report what they cost. On the stack they are invisible to `llvm-size`.
+static_cell = "2"
+
+[dependencies.matter-kit]
+path = ".."
+default-features = false
+features = ["rustcrypto"]
+
+# What ships on the part, not what is convenient to debug: the numbers below are meaningless
+# from a debug build, and a device's build profile is this one.
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = false            # symbols cost nothing in .text and are what makes a regression diagnosable
+debug = false
+incremental = false
+overflow-checks = false

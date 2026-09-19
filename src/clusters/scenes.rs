@@ -448,6 +448,13 @@ fn status_response(
 impl<H: SceneHooks, G: GroupMembership, const N: usize, const EFS: usize, const F: usize>
     ClusterHandler for Scenes<'_, H, G, N, EFS, F>
 {
+    /// §1.4.6: the Scene Table is fabric-scoped, so a removed fabric's scenes go with it —
+    /// including the ones stored against its groups.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.table.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

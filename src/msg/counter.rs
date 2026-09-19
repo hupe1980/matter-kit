@@ -256,8 +256,9 @@ impl MessageCounter {
     /// thousand begins with under a million counters left: it stops working early, and nothing
     /// anywhere says why.
     ///
-    /// The narrowing lives here rather than at each caller for the same reason the peer and the
-    /// report cursor do (D82, D83). [`at`](Self::at) is for an exact value — a persisted
+    /// The narrowing lives here rather than at each caller, for the same reason a session
+    /// remembers its peer and a subscription its report cursor: per-interaction state belongs
+    /// to the thing it describes. [`at`](Self::at) is for an exact value — a persisted
     /// counter, or the end of the range in a test.
     #[must_use]
     pub const fn new(randomness: u32) -> Self {

@@ -42,8 +42,8 @@ use crate::im::{AttributeId, ClusterId, CommandId, EventId};
 
 /// What the specification says about an element's presence.
 ///
-/// The order matters for [`Conformance::is_permitted`]: only the first two mean the element may
-/// exist at all.
+/// Four of the five are decisions; `Described` is the refusal to make one, and
+/// [`Cluster::validate`](crate::dm::spec::Cluster::validate) is where all five are acted on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Conformance {
     /// `M` — the element SHALL be present.
@@ -63,22 +63,15 @@ pub enum Conformance {
     Described,
 }
 
-impl Conformance {
-    /// Whether an element with this verdict may appear at all.
-    #[must_use]
-    pub const fn is_permitted(self) -> bool {
-        matches!(
-            self,
-            Self::Mandatory | Self::Optional | Self::Provisional | Self::Deprecated
-        )
-    }
-
-    /// Whether an element with this verdict must appear.
-    #[must_use]
-    pub const fn is_required(self) -> bool {
-        matches!(self, Self::Mandatory)
-    }
-}
+// There is deliberately no `is_permitted`/`is_required` pair here, convenient as one would look.
+// `Described` is not a boolean in either direction — the specification's own words decide, which
+// is why `Cluster::validate` skips those elements instead of judging them — so a predicate would
+// have to answer `false` for it, and `false` reads as "forbidden". That is a guess in exactly
+// the direction the verdict exists to refuse.
+//
+// An element's conformance is asked through
+// [`Cluster::validate`](crate::dm::spec::Cluster::validate), which has all three answers and a
+// place to put the third.
 
 /// What an element's presence depends on.
 ///

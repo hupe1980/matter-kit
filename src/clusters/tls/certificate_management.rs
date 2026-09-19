@@ -119,6 +119,14 @@ fn find_client<const R: usize, const C: usize, const E: usize>(
 impl<H: TlsCertificateHooks, const R: usize, const C: usize, const E: usize> ClusterHandler
     for CertificateManagement<'_, H, R, C, E>
 {
+    /// §14.4: the certificate tables are fabric-scoped, and the private keys behind them live
+    /// in the application's store — so removal has to reach that too, which is what the hooks
+    /// are for.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.tables.remove_fabric(fabric, self.hooks);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

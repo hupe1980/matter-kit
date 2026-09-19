@@ -74,7 +74,7 @@ pub struct BridgedDevice<'a> {
     pub software_version: Option<u32>,
     /// `SoftwareVersionString`.
     pub software_version_string: Option<&'a str>,
-    /// `ManufacturingDate`, as §11.1.6.11's "YYYYMMDD" prefix.
+    /// `ManufacturingDate`, as §11.1.5.12's "YYYYMMDD" prefix.
     pub manufacturing_date: Option<&'a str>,
     /// `PartNumber`.
     pub part_number: Option<&'a str>,
@@ -110,7 +110,7 @@ pub struct PendingActive {
     pub expires: Instant,
 }
 
-/// What a device labelled its `NodeLabel` (§11.1.6.6) — writable, max 32.
+/// What a device labelled its `NodeLabel` (§11.1.5.6) — writable, max 32.
 pub const NODE_LABEL_MAX: usize = 32;
 
 /// Bridged Device Basic Information for one bridged device.
@@ -397,7 +397,7 @@ impl ClusterHandler for BridgedDeviceBasicInformation<'_> {
         _op: crate::im::WriteOp,
         _ctx: &InteractionContext<'_>,
     ) -> Result<(), Status> {
-        // §11.1.6.6's `NodeLabel` is the one writable attribute: the user's name for the
+        // §11.1.5.6's `NodeLabel` is the one writable attribute: the user's name for the
         // device, which belongs to whoever is looking at it rather than to the bridge.
         if resolved.attribute != NODE_LABEL {
             return Err(Status::UnsupportedWrite);

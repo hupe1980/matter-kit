@@ -233,8 +233,8 @@ fi
 if [ $failed -ne 0 ]; then
   echo "    failing: ${failures[*]}"
 fi
-# A skip exits non-zero too. It is a case that was asked for and did not run, and the whole
-# reason this reports it separately is that it used to report it as a pass.
+# A skip exits non-zero too: it is a case that was asked for and did not run, which is not a
+# pass and must not be counted as one.
 if [ $failed -ne 0 ] || [ $skipped_cases -ne 0 ]; then
   exit 1
 fi

@@ -103,7 +103,7 @@ pub const S3K_INFO: &[u8] = b"Sigma3";
 pub const S1RK_INFO: &[u8] = b"Sigma1_Resume";
 /// `S2RK_Info` — "Sigma2_Resume".
 pub const S2RK_INFO: &[u8] = b"Sigma2_Resume";
-/// `SEKeys_Info` — "SessionKeys", shared with PASE (§4.14.1.5).
+/// `SEKeys_Info` — "SessionKeys", shared with PASE (§4.14.1.2).
 pub const SESSION_KEYS_INFO: &[u8] = crate::session::SESSION_KEYS_INFO;
 /// `RSEKeys_Info` — "SessionResumptionKeys".
 pub const RESUMPTION_SESSION_KEYS_INFO: &[u8] = b"SessionResumptionKeys";
@@ -193,15 +193,15 @@ pub const MAX_SESSION_PARAMS: usize = STRUCTURE_OVERHEAD + (9 * 6);
 
 /// The bounds above, checked against the encoding rules at compile time.
 ///
-/// They are `const` assertions rather than tests for the reason [`crate::Config`]'s minima are
-/// (D3): a buffer bound that is wrong is not a failing test, it is a node that cannot complete
+/// They are `const` assertions rather than tests for the reason [`crate::Config`]'s minima
+/// are: a buffer bound that is wrong is not a failing test, it is a node that cannot complete
 /// a handshake with a conforming peer, and the cheapest place to say so is the build.
 ///
 /// Each is the sum of what the field actually costs, recomputed here from the octet counts
 /// rather than from the constants, so that a constant edited without its derivation fails. The
 /// numbers they guard were both wrong before anyone looked: `MAX_ENCRYPTED3` was five octets
 /// short of two certificates at §6.1.3's cap, and `MAX_SIGMA2` did not exist, so `examples/light`
-/// used a round 1024 against a real Sigma2 of 1081 (D80).
+/// used a round 1024 against a real Sigma2 of 1081.
 const _: () = {
     // `sigma-2-tbedata` = { NOC, ICAC, signature, resumptionID }, sealed.
     assert!(
@@ -1196,10 +1196,42 @@ impl CaseResponder {
         Ok(len)
     }
 
+    /// Validates a `Sigma3` against the root of the fabric `Sigma1` resolved, and writes the
+    /// `SigmaFinished` status report (§4.14.2.3).
+    ///
+    /// `fabric` is the index [`accept_sigma1`] returned, and using any other is the mistake this
+    /// exists to prevent: §4.14.2.3's Validate Sigma3 checks the initiator's certificate chain
+    /// against *this fabric's* trusted root, and a chain that verifies against another root is a
+    /// chain from another administrator. Taking whichever root the table lists first works
+    /// perfectly on a node with one fabric and refuses every peer on the second — as
+    /// `chain does not validate`, which reads like a bad certificate and is not one.
+    ///
+    /// `at` is the current Matter `epoch-s`, or `None` on a node without a clock (§6.4.5.1).
+    #[cfg(feature = "rustcrypto")]
+    pub fn accept_sigma3<C: crate::config::Config, const N: usize>(
+        &mut self,
+        sigma3: &Sigma3<'_>,
+        fabrics: &crate::fabric::FabricTable<C, N>,
+        fabric: crate::msg::FabricIndex,
+        at: Option<u32>,
+        out: &mut [u8],
+    ) -> Result<(CaseOutcome, usize)> {
+        let rcac = fabrics
+            .find(fabric)
+            .map(|f| f.credentials.rcac.clone())
+            .ok_or(Error::new(ErrorCode::NoSession))?;
+        let root = MatterCertificate::decode(&rcac)?;
+        let outcome = self.handle_sigma3(sigma3, &root, at)?;
+        let n = self.finished(out)?;
+        Ok((outcome, n))
+    }
+
     /// Handles a Sigma3, verifying the initiator's chain and establishing the session.
     ///
     /// `root` is the fabric's trusted root certificate; `at` the current Matter `epoch-s`,
-    /// or `None` on a node without a clock (§6.4.5.1).
+    /// or `None` on a node without a clock (§6.4.5.1). Prefer
+    /// [`accept_sigma3`](CaseResponder::accept_sigma3), which takes the root from the fabric the
+    /// handshake is on rather than from the caller's memory.
     pub fn handle_sigma3(
         &mut self,
         sigma3: &Sigma3<'_>,
@@ -1273,6 +1305,77 @@ impl CaseResponder {
     pub const fn is_failed(&self) -> bool {
         matches!(self.state, ResponderState::Failed)
     }
+}
+
+/// The three random values answering a `Sigma1` consumes (§4.14.2.3, §4.21).
+///
+/// Named rather than positional because they are three byte arrays of two different lengths
+/// that a caller draws from one source: passed in the wrong order they still type-check where
+/// the lengths agree, and the failure is a handshake that completes and a session nobody else
+/// can address. Randomness is a parameter throughout this crate, so the caller draws them —
+/// this only says which is which.
+#[derive(Debug, Clone, Copy)]
+pub struct Sigma2Randomness<'a> {
+    /// The responder's ephemeral key material.
+    pub ephemeral: &'a [u8; GROUP_SIZE_BYTES],
+    /// `responderRandom`, which the transcript covers.
+    pub responder: &'a [u8; RANDOM_LEN],
+    /// The resumption id this session would be resumed by.
+    pub resumption: &'a [u8; RESUMPTION_ID_LEN],
+}
+
+/// Answers a `Sigma1` from the node's fabric table (§4.14.2.3).
+///
+/// Two steps sit between a decoded `Sigma1` and [`CaseResponder::handle_sigma1`], and both are
+/// easy to get wrong in a way that works perfectly on a node with one fabric:
+///
+/// 1. **Which fabric the initiator named.** §4.14.2.4.1's destination identifier is a MAC only
+///    something holding that fabric's IPK and one of this node's identities on it could have
+///    computed, so resolving it is the lookup and the admission check at once — and the scan
+///    over the table is constant-time, so a near miss and a wild miss cost the same.
+/// 2. **Which credentials to answer with** — the NOC and ICAC `AddNOC` stored *for that fabric*.
+///
+/// Returns the responder, the fabric it resolved and the length of the `Sigma2` written to
+/// `out`. Keep the fabric index with the responder:
+/// [`accept_sigma3`](CaseResponder::accept_sigma3) needs it.
+///
+/// [`ErrorCode::NoSession`] means no fabric matched, which is the ordinary answer to a `Sigma1`
+/// meant for another node on the link rather than a fault.
+pub fn accept_sigma1<C: crate::config::Config, const N: usize, K: KeyStore>(
+    sigma1: &Sigma1<'_>,
+    fabrics: &crate::fabric::FabricTable<C, N>,
+    keys: &mut K,
+    local: SessionId,
+    session_params: Option<SessionParams>,
+    randomness: &Sigma2Randomness<'_>,
+    out: &mut [u8],
+) -> Result<(CaseResponder, crate::msg::FabricIndex, usize)> {
+    let Sigma2Randomness {
+        ephemeral: ephemeral_random,
+        responder: responder_random,
+        resumption: resumption_random,
+    } = randomness;
+    let fabric = fabrics
+        .find_by_destination_identifier(&sigma1.initiator_random, &sigma1.destination_id)?
+        .ok_or(Error::new(ErrorCode::NoSession))?;
+    let index = fabric.index;
+    let noc = fabric.credentials.noc.clone();
+    let icac = fabric.credentials.icac.clone();
+    let fabric = fabric.clone();
+
+    let mut responder = CaseResponder::new(local, session_params);
+    let n = responder.handle_sigma1(
+        sigma1,
+        &fabric,
+        &noc,
+        icac.as_deref(),
+        keys,
+        ephemeral_random,
+        responder_random,
+        resumption_random,
+        out,
+    )?;
+    Ok((responder, index, n))
 }
 
 // --- Initiator --------------------------------------------------------------------------

@@ -128,16 +128,23 @@ fn mod_file(model: &DataModel, modules: &[(String, &Cluster)]) -> String {
             .collect::<String>()
     );
 
-    out.push_str(
+    // The entry count is interpolated rather than written down: a number in a comment that the
+    // data model moves every revision is a number that is wrong between revisions.
+    let entries = modules
+        .iter()
+        .filter(|(_, cluster)| !cluster.is_base)
+        .count();
+    let _ = write!(
+        out,
         "/// The specification's definition of a cluster, by id.\n\
          ///\n\
-         /// Linear over 128 entries, which is nothing next to what a caller does with the\n\
-         /// answer — and a sorted binary search would be one `unsafe`-free `expect` away from\n\
-         /// a table that is sorted by construction anyway.\n\
+         /// Linear over {entries} entries, which is nothing next to what a caller does with\n\
+         /// the answer — and a sorted binary search would be one `unsafe`-free `expect` away\n\
+         /// from a table that is sorted by construction anyway.\n\
          #[must_use]\n\
-         pub fn find(id: crate::im::ClusterId) -> Option<&'static crate::dm::spec::Cluster> {\n\
+         pub fn find(id: crate::im::ClusterId) -> Option<&'static crate::dm::spec::Cluster> {{\n\
          \x20   ALL.iter().copied().find(|cluster| cluster.id == id)\n\
-         }\n",
+         }}\n",
     );
     out
 }

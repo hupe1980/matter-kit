@@ -216,8 +216,29 @@ issued by the reference implementation.
 # All eleven pass.
 ./interop/chip/python.sh TC_CGEN_2_1 TC_OPCREDS_3_1 TC_ACL_2_2 TC_ACL_2_4 TC_ACL_2_6 \
     TC_ACL_2_10 TC_IDM_1_2 TC_IDM_1_4 TC_IDM_2_2 TC_IDM_2_3 TC_IDM_4_2
-./interop/chip/python.sh --list   # all 603
+./interop/chip/python.sh --list   # all 618
 ```
+
+## The two checks that need a local copy of something
+
+Neither can run in a hosted CI job, and both have found defects nothing else could.
+
+```sh
+cargo xtask cite    # every § reference and every normative quotation, against the PDFs
+cargo xtask api     # every pub fn against every call site: what nothing calls
+./footprint/run.sh  # link a light for an nRF52840 and read the sections out
+```
+
+`cargo xtask cite` needs the specification PDFs, which are free from csa-iot.org and not
+redistributable, so they are not in the repository. It reads these guides too — a `>` blockquote
+here is a claim about the specification exactly as a `///` block in the source is. It is the
+first thing to run before a specification uplift: a renumbering between revisions is exactly
+what it finds, and fourteen citations in this crate have been wrong, three of them quotations
+that were real but abridged past the point of being verbatim.
+
+`cargo xtask api` is cheaper and blunter. A public function nothing calls is usually spare API
+and occasionally the missing half of a rule — three of this crate's defects were exactly that,
+including a session table that answered "no space" where §4.11.1.1 requires an eviction.
 
 A **skip** is reported as a skip and exits non-zero. Most `TC_*.py` carry a `has_attribute` or
 `has_feature` decorator, so a device that does not implement the thing a case tests does not fail

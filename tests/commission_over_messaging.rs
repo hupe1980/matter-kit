@@ -724,5 +724,6 @@ fn a_standalone_acknowledgement_is_a_secure_channel_message() {
             );
             assert_eq!(header.opcode, matter_kit::sc::opcode::MRP_STANDALONE_ACK);
         }
+        other => panic!("unexpected {other:?}"),
     }
 }

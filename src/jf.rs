@@ -19,8 +19,8 @@
 //! [`CaseAuthenticatedTag`], and §12.2.4 reserves two
 //! identifiers for it:
 //!
-//! * the **Administrator CAT** (`0xFFFF`), which "all devices participating in Joint Fabric
-//!   SHALL contain an ACL entry granting Administer privilege to";
+//! * the **Administrator CAT** (`0xFFFF`): every device on a Joint Fabric "SHALL contain an ACL
+//!   entry granting Administer privilege to CaseSubjectAdmin set to the Administrator CAT";
 //! * the **Anchor CAT** (`0xFFFE`), which does the same one level up — it is what restricts
 //!   Administer *on an administrator* to the anchor.
 //!

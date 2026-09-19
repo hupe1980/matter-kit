@@ -64,6 +64,54 @@ let (bytes, _) = server.serve_write(writes, &ctx, &mut buf)?;                   
 let (bytes, _) = server.serve_invoke(cmds, &ctx, false, &mut scratch, &mut buf)?; // Invoke
 ```
 
+The same handler is how the node tells its clusters that something happened to *it*. A fabric
+being removed reaches scenes, groups, bindings, group keys and access-control entries — each
+owned by a different cluster, none of them visible from the one that ran `RemoveFabric` — so it
+is delivered to every member of the tuple rather than routed to one:
+
+```rust,ignore
+use matter_kit::im::Lifecycle;
+
+handler.on_lifecycle(Lifecycle::FabricRemoved(index));      // §11.18.6.12
+handler.on_lifecycle(Lifecycle::FailSafeExpired { fabric }); // §11.10.7.2.2
+handler.on_lifecycle(Lifecycle::CommissioningComplete(index)); // §11.10.7.6
+```
+
+`on_lifecycle` defaults to doing nothing, so a cluster with no fabric-scoped state writes no
+code — and adding a cluster to a device adds it to the fan-out by construction. Fabric indices
+are reused: an entry that outlives its fabric is inherited by whoever holds that index next.
+
+## Answer a handshake
+
+A commissioner's first message arrives on the Secure Channel protocol, and what it needs from
+the node is not one handshake but the rules around it: one at a time, sixty seconds to finish,
+twenty failures and commissioning mode ends — plus the verifier an open Enhanced window supplies
+instead of the printed passcode, and the session that comes out the other end.
+
+```rust,ignore
+use matter_kit::sc::{Channel, ChannelBuffers, ChannelContext};
+
+let mut channel = Channel::new();
+
+// …per message, from the socket loop:
+let answered = channel.on_message(
+    &mut stack,
+    header.opcode,
+    &body,
+    &ChannelContext { fabrics: &fabrics, keys: &keys, rng: &rng, window: &window,
+                      verifier: &verifier, parameters: &parameters, now },
+    &mut ChannelBuffers { reply: &mut payload, frame: &mut frame, evict: &mut evict },
+)?;
+
+if let Some(established) = answered.established {
+    // The session is already installed, and §4.11.1.1's eviction has already happened if it
+    // had to. `answered.evicted` is the report its peer is owed, framed and ready to send.
+}
+```
+
+`None` in `answered.reply` means say nothing — a message for a handshake that is not running
+tells a stranger nothing about the node, so it is dropped rather than answered.
+
 ## Read the wire
 
 Everything Matter puts on the wire above the message header is TLV.

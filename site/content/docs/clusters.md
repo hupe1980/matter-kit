@@ -158,6 +158,85 @@ exists for a situation the specification describes in plain words:
 
 A device that reimplemented any of that would be reimplementing the part certification tests.
 
+## Numbers this stack does not own
+
+The three network diagnostics clusters — Ethernet (§11.16), Wi-Fi (§11.15) and Thread (§11.14) —
+report counters, signal strengths and neighbour tables that belong to an interface `matter-kit`
+has no access to. So each is a **driver trait** you implement, with a default for every method,
+and none of them needs a radio to compile or to test.
+
+```rust,ignore
+use matter_kit::clusters::wi_fi_network_diagnostics::{
+    SecurityTypeEnum, WiFiDriver, WiFiNetworkDiagnostics, feature,
+};
+
+struct Radio;
+impl WiFiDriver for Radio {
+    fn bssid(&self) -> Option<[u8; 6]> { Some(self.ap_mac()) }
+    fn security_type(&self) -> Option<SecurityTypeEnum> { Some(SecurityTypeEnum::WPA3) }
+    fn rssi(&self) -> Option<i8> { Some(self.signal_dbm()) }
+    fn beacon_rx_count(&self) -> Option<u32> { Some(self.beacons()) }
+    fn reset_counts(&self) { self.zero_counters(); }
+}
+
+// `PKTCNT`, because this driver counts beacons. Claiming a feature is a promise.
+let cluster = WiFiNetworkDiagnostics::<_, 4>::new(&radio, feature::PACKET_COUNTS);
+```
+
+**The return type tells you how many answers the specification allows**, and that differs between
+the three:
+
+- `Option<T>` — the attribute is mandatory and nullable, so there are two answers: a value, or
+  `null`, meaning the interface is not currently configured or operational. Almost everything on
+  Wi-Fi and Thread is this. You cannot say "my device does not report `RSSI`", because a Wi-Fi
+  device does.
+- `Reading<T>` — the attribute is optional *and* nullable, so there is a third answer:
+  `Reading::Unsupported`, which also keeps the attribute out of `AttributeList`. Ethernet's
+  `PHYRate`, `FullDuplex` and `CarrierDetect` are this; on Wi-Fi only `CurrentMaxRate` is.
+- A slice — the attribute is a mandatory list, and empty is a perfectly good answer. Thread's
+  `NeighborTable`, `RouteTable` and `ActiveNetworkFaultsList`.
+
+Get that wrong and an attribute is either answered but not advertised — a number no client can
+find — or advertised but not answered, which is a read that fails.
+
+**Claiming a feature is a promise you can count.** A device that advertises `ERRCNT` and reports
+zero collisions forever tells a support engineer the link is clean. So an unclaimed counter is
+refused rather than answered as zero, and it stays out of `AttributeList`.
+
+Thread's thirty-four `MACCNT` counters and eight `MLECNT` counters arrive as two structs,
+`MacCounters` and `MleCounters`, because that is how a Thread stack hands them over. Every field
+is `Option`: a counter is optional *within* its feature, so one you leave `None` belongs out of
+the optional set the descriptor is built from too.
+
+**Events are the driver's to notice.** Wi-Fi's `Disconnection`, `AssociationFailure` and
+`ConnectionStatus`, and Thread's `ConnectionStatus` and `NetworkFaultChange`, are recorded on the
+cluster and drained by the device into its own event store:
+
+```rust,ignore
+for event in wifi.take_events() {
+    let mut payload = [0u8; 64];
+    let mut w = TlvWriter::new_in(&mut payload, ContainerKind::Structure);
+    event.encode(&mut w, Tag::Context(7))?;
+    events.record(&NewEvent {
+        endpoint: 0,
+        cluster: wi_fi_network_diagnostics::ID,
+        event: event.id(),
+        priority: event.priority(),
+        timestamp: Timestamp::System(now.as_millis()),
+        fabric_index: None,
+        data: w.finish()?,
+    })?;
+    subscriptions.note_event(0, wi_fi_network_diagnostics::ID, event.id());
+}
+```
+
+The queue is bounded and drops its oldest rather than refusing, so a radio that flaps cannot make
+the cluster fail.
+
+One last difference, which looks like a mistake until you check it: `ResetCounts` is conditional
+on `PKTCNT | ERRCNT` on Ethernet and on `ERRCNT` alone on Wi-Fi and Thread. A Wi-Fi device that
+counts packets and no errors genuinely has no `ResetCounts`.
+
 ## More than one endpoint
 
 A tuple of clusters dispatches on the cluster id, which is all a single-endpoint device needs.

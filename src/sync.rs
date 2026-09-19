@@ -6,7 +6,7 @@
 //! from a work-stealing pool, and a future that is `!Send` cannot be spawned there at all.
 //!
 //! [`Shared`] is the seam. Without the `sync-mutex` feature it is a [`core::cell::RefCell`] and the
-//! controller stays single-threaded and cheap; with it, a [`Mutex`](std::sync::Mutex), and the
+//! controller stays single-threaded and cheap; with it, an [`RwLock`](std::sync::RwLock), and the
 //! state becomes `Send + Sync` so a run future holding it can be spawned across threads.
 //!
 //! ```rust,ignore
@@ -20,12 +20,17 @@
 //!
 //! # One rule, and it is not optional
 //!
-//! **Never hold a borrow across an `await`, and never take a second borrow while one is live.**
+//! **Never hold a borrow across an `await`.**
 //!
-//! With a `RefCell` the second of those panics at the point of the mistake; with a `Mutex` it
-//! *deadlocks*, silently, somewhere else. That asymmetry is why this type exists rather than a
-//! bare `cfg` on each declaration: a crate that can be built both ways is one where the
-//! single-threaded build finds the bug and the multi-threaded build would only have hung.
+//! That is the whole of it, in both builds, because [`RwLock`](std::sync::RwLock) is the shape
+//! [`RefCell`](core::cell::RefCell) already has: many shared borrows, or one exclusive borrow. A
+//! [`Mutex`](std::sync::Mutex) would have one kind of lock, so two `borrow()`s would compile and
+//! work without the feature and deadlock with it — and a seam whose two builds disagree about
+//! what is legal is a seam that tests one of them.
+//!
+//! What differs between the builds is only what happens when the rule is broken: a `RefCell`
+//! panics at the mistake, a lock waits somewhere else. Which is why the single-threaded build is
+//! the one to develop against.
 //!
 //! The crate's own device clusters deliberately keep their [`core::cell::RefCell`]s: a device is
 //! single-threaded by construction and converting them would trade a panic that points at the
@@ -36,7 +41,8 @@ use core::cell::RefCell;
 
 /// State shared between the parts of a controller.
 ///
-/// A [`core::cell::RefCell`] by default; a [`Mutex`](std::sync::Mutex) under `sync-mutex`.
+/// A [`core::cell::RefCell`] by default; an [`RwLock`](std::sync::RwLock) under `sync-mutex`.
+/// Both admit many readers or one writer, so code written against one is correct on the other.
 #[cfg(not(feature = "sync-mutex"))]
 #[derive(Debug, Default)]
 pub struct Shared<T>(RefCell<T>);
@@ -44,7 +50,7 @@ pub struct Shared<T>(RefCell<T>);
 /// State shared between the parts of a controller, across threads.
 #[cfg(feature = "sync-mutex")]
 #[derive(Debug, Default)]
-pub struct Shared<T>(std::sync::Mutex<T>);
+pub struct Shared<T>(std::sync::RwLock<T>);
 
 /// A shared borrow of the contents.
 #[cfg(not(feature = "sync-mutex"))]
@@ -52,11 +58,10 @@ pub type Ref<'a, T> = core::cell::Ref<'a, T>;
 
 /// A shared borrow of the contents.
 ///
-/// The same guard as [`RefMut`] under `sync-mutex`: a mutex has one kind of lock, so a reader
-/// and a writer exclude each other. Code that takes two `borrow()`s at once compiles and works
-/// without the feature, and deadlocks with it — which is the rule at the top of this module.
+/// A read guard under `sync-mutex`, so several may be live at once — the same rule
+/// [`core::cell::Ref`] follows.
 #[cfg(feature = "sync-mutex")]
-pub type Ref<'a, T> = std::sync::MutexGuard<'a, T>;
+pub type Ref<'a, T> = std::sync::RwLockReadGuard<'a, T>;
 
 /// An exclusive borrow of the contents.
 #[cfg(not(feature = "sync-mutex"))]
@@ -64,7 +69,7 @@ pub type RefMut<'a, T> = core::cell::RefMut<'a, T>;
 
 /// An exclusive borrow of the contents.
 #[cfg(feature = "sync-mutex")]
-pub type RefMut<'a, T> = std::sync::MutexGuard<'a, T>;
+pub type RefMut<'a, T> = std::sync::RwLockWriteGuard<'a, T>;
 
 impl<T> Shared<T> {
     /// Wraps `value`.
@@ -76,7 +81,7 @@ impl<T> Shared<T> {
         }
         #[cfg(feature = "sync-mutex")]
         {
-            Self(std::sync::Mutex::new(value))
+            Self(std::sync::RwLock::new(value))
         }
     }
 
@@ -84,9 +89,9 @@ impl<T> Shared<T> {
     ///
     /// # Panics
     ///
-    /// Without `sync-mutex`, if a mutable borrow is live — [`core::cell::RefCell`]'s rule. With it, never:
-    /// a poisoned mutex is recovered from rather than propagated, because a controller that
-    /// stopped answering every node because one task panicked would turn one fault into an
+    /// Without `sync-mutex`, if a mutable borrow is live — [`core::cell::RefCell`]'s rule. With
+    /// it, never: a poisoned lock is recovered from rather than propagated, because a controller
+    /// that stopped answering every node because one task panicked would turn one fault into an
     /// outage.
     pub fn borrow(&self) -> Ref<'_, T> {
         #[cfg(not(feature = "sync-mutex"))]
@@ -96,7 +101,7 @@ impl<T> Shared<T> {
         #[cfg(feature = "sync-mutex")]
         {
             self.0
-                .lock()
+                .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         }
     }
@@ -114,7 +119,7 @@ impl<T> Shared<T> {
         #[cfg(feature = "sync-mutex")]
         {
             self.0
-                .lock()
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
         }
     }
@@ -157,3 +162,27 @@ const _: () = {
     assert_send::<Shared<u32>>();
     assert_sync::<Shared<u32>>();
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The property the backing type is chosen for: what compiles and works in the
+    /// single-threaded build does the same thing in the multi-threaded one. A `Mutex` behind
+    /// `Shared` would deadlock here under `sync-mutex` and pass without it.
+    #[test]
+    fn two_shared_borrows_are_live_at_once() {
+        let shared = Shared::new(41u32);
+        let first = shared.borrow();
+        let second = shared.borrow();
+        assert_eq!(*first + *second, 82);
+    }
+
+    #[test]
+    fn an_exclusive_borrow_writes_through() {
+        let shared = Shared::new(1u32);
+        *shared.borrow_mut() = 7;
+        assert_eq!(*shared.borrow(), 7);
+        assert_eq!(shared.into_inner(), 7);
+    }
+}

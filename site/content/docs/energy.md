@@ -98,11 +98,11 @@ the user was quoted.
 Every EVSE command is `OT` — Operate *and Timed*. §8.7.4's Timed transaction is what stops an
 `EnableCharging` meant for two in the morning arriving at six in the evening.
 
-## One Mode Base, fifteen clusters
+## One Mode Base, ten clusters
 
-About fifteen clusters in the 1.6 library are "derived from the Mode Base cluster and define
-additional mode tags and namespaced enumerated values" — Energy EVSE Mode, Water Heater Mode,
-Dishwasher Mode, Laundry Washer Mode. They differ in their id, their PICS code and their tags,
+Ten clusters in the 1.6 library are "derived from the Mode Base cluster and define additional
+mode tags and namespaced enumerated values" — Energy EVSE Mode, Water Heater Mode, Dishwasher
+Mode, Laundry Washer Mode and six more. They differ in their id, their PICS code and their tags,
 and in nothing else. So there is one implementation, and the cluster id is a const parameter:
 
 ```rust,ignore
@@ -115,7 +115,7 @@ let mode = Mode::<_, { energy_evse_mode::ID }>::new(
 ```
 
 A const parameter rather than a field, because `Cluster::ID` is an associated constant and that
-is what lets a tuple dispatch. One implementation therefore produces fifteen distinct *types* —
+is what lets a tuple dispatch. One implementation therefore produces ten distinct *types* —
 which is exactly right for an endpoint that has two mode clusters.
 
 `Mode::new` enforces §1.10.6.1 at construction: at least two modes, every `Mode` unique, every

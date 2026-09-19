@@ -453,9 +453,9 @@ pub const ALL: &[&crate::dm::spec::Cluster] = &[
 
 /// The specification's definition of a cluster, by id.
 ///
-/// Linear over 128 entries, which is nothing next to what a caller does with the
-/// answer — and a sorted binary search would be one `unsafe`-free `expect` away from
-/// a table that is sorted by construction anyway.
+/// Linear over 135 entries, which is nothing next to what a caller does with
+/// the answer — and a sorted binary search would be one `unsafe`-free `expect` away
+/// from a table that is sorted by construction anyway.
 #[must_use]
 pub fn find(id: crate::im::ClusterId) -> Option<&'static crate::dm::spec::Cluster> {
     ALL.iter().copied().find(|cluster| cluster.id == id)

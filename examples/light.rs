@@ -49,7 +49,6 @@ use core::task::Poll;
 
 use matter_kit::acl::{Acl, AclAccess, SubjectDescriptor};
 use matter_kit::attestation::factory::DevelopmentChain;
-use matter_kit::cert::MatterCertificate;
 use matter_kit::clusters::access_control::{self, AccessControl};
 use matter_kit::clusters::administrator_commissioning::{self, AdministratorCommissioning};
 use matter_kit::clusters::basic_information::{
@@ -74,7 +73,6 @@ use matter_kit::clusters::operational_credentials::{
 };
 use matter_kit::clusters::scenes::{self, ExtensionFieldSetStruct, SceneHooks, SceneTable, Scenes};
 use matter_kit::clusters::{At, Endpoints};
-use matter_kit::commissioning::admission::{Admit, PaseAdmission};
 use matter_kit::commissioning::failsafe::{BasicCommissioningInfo, FailSafe};
 use matter_kit::commissioning::window::{CommissioningWindow, WindowStatus};
 use matter_kit::config::{Config, DefaultConfig};
@@ -86,23 +84,33 @@ use matter_kit::dm::spec::Optional;
 use matter_kit::dm::{DataVersions, DeviceType, Endpoint, Node};
 use matter_kit::fabric::FabricTable;
 use matter_kit::im::{
-    Dispatcher, InteractionContext, NewSubscription, ReadCursor, ReportReason, Request, Served,
-    Server, SubscribeResponse, SubscriptionPolicy, SubscriptionTable,
+    ClusterHandler, Dispatcher, InteractionContext, Lifecycle, NewSubscription, ReadCursor,
+    ReportReason, Request, Served, Server, SubscribeResponse, SubscriptionPolicy,
+    SubscriptionTable,
 };
 use matter_kit::messaging::{Due, Messaging, Received};
 use matter_kit::msg::{FabricIndex, NodeId, ProtocolId, SessionId, VendorId};
 use matter_kit::platform::os::{StdRng, StdTimer, StdUdp, block_on};
 use matter_kit::platform::{Instant, Peer, PeerAddr, Rng, Timer, Udp};
-use matter_kit::sc::{
-    CaseResponder, PaseResponder, PbkdfParameters, ResponderConfig, SecureChannelCode,
-    SessionParams, Sigma1, Sigma3, StatusReport, opcode,
-};
-use matter_kit::session::{Role, SecureSession, SessionKind};
+use matter_kit::sc::PbkdfParameters;
+use matter_kit::session::SessionKind;
 
-/// The passcode that would be printed on the device's label, and its factory PBKDF salt.
+/// The passcode that would be printed on the device's label.
 const PASSCODE: u32 = 20_202_021;
-const SALT: &[u8] = b"SPAKE2P Key Salt";
-const ITERATIONS: u32 = 1_000;
+/// The PBKDF iteration count the device asks a commissioner to use.
+///
+/// §3.9 allows 1 000 to 100 000, and 1 000 — the floor, and what most implementations ship —
+/// is the number an offline attack against leaked verifier material is priced at. Matter's
+/// passcode holds about 27 bits of entropy and the verifier is derived from it with PBKDF2,
+/// which is not memory-hard, so the whole defence is the iteration count and the salt: with
+/// the floor and a shared salt, a published analysis of Matter recovers the passcode from
+/// leaked verifier material on commodity hardware.
+///
+/// This costs a commissioner one derivation per pairing and the device one per boot. The salt
+/// below is drawn fresh rather than being a constant, which is the other half of the same
+/// finding — a device that ships the CHIP test salt shares its pre-computation with every
+/// other device that ships it.
+const ITERATIONS: u32 = 10_000;
 /// §5.1.1.3's 12-bit discriminator, which a commissioner filters on.
 const DISCRIMINATOR: u16 = 3840;
 
@@ -733,9 +741,20 @@ fn main() {
     };
 
     // --- Session establishment ----------------------------------------------------------------
-    let parameters = PbkdfParameters::new(ITERATIONS, SALT).expect("parameters");
+    // A per-device salt, not a shared constant. On a real product this is drawn once at
+    // manufacture and burned beside the verifier — the passcode is *not* stored, so the salt
+    // cannot be redrawn later without it. Here the example knows the passcode (it prints it),
+    // so it can do at boot what a factory does once.
+    let mut salt = [0u8; matter_kit::crypto::PBKDF_SALT_MIN_BYTES];
+    for chunk in salt.chunks_mut(4) {
+        let word = rng.next_u32().expect("rng").to_le_bytes();
+        for (slot, byte) in chunk.iter_mut().zip(word) {
+            *slot = byte;
+        }
+    }
+    let parameters = PbkdfParameters::new(ITERATIONS, &salt).expect("parameters");
     let verifier =
-        Spake2pVerifierData::from_passcode(PASSCODE, SALT, ITERATIONS).expect("verifier");
+        Spake2pVerifierData::from_passcode(PASSCODE, &salt, ITERATIONS).expect("verifier");
 
     let mut stack = Stack::new(
         rng.next_u32().expect("rng") as u16 | 1,
@@ -750,6 +769,12 @@ fn main() {
     // §8.5's subscriptions. The table outlives every exchange that touches it: a subscription
     // is created by one, reported on by many, and removed when its session goes away.
     let mut subscriptions = Subscriptions::new();
+    // §4.16.1's peer table: one counter space per sender per **C** flag, and never recycled —
+    // "any message from a source that cannot be tracked SHALL be dropped", because an attacker
+    // who could evict a peer could then replay it.
+    let mut group_peers = matter_kit::group::PeerTable::<4, 2>::new();
+    // Which multicast addresses this node has already asked the kernel for.
+    let mut joined: std::collections::BTreeSet<[u8; 16]> = std::collections::BTreeSet::new();
     // One outstanding report per subscription, and no more. A report goes out on an exchange of
     // the node's own making, and MRP owns it until the subscriber acknowledges it or it is
     // abandoned. Opening a second one while the first is still in flight is how a node with
@@ -757,21 +782,13 @@ fn main() {
     // datagram with `no space` — including the acknowledgements that would have freed it.
     let mut reporting: heapless::Vec<(u32, matter_kit::exchange::ExchangeKey), 8> =
         heapless::Vec::new();
-    // §6.2.3's attestation challenge, which PASE produces alongside the session keys and which
-    // `AttestationRequest` signs over. It belongs to the *session*, so a device with more than
-    // one would keep it there; this example holds the one it has.
-    let mut attestation_challenge: Option<matter_kit::crypto::SymmetricKey> = None;
-    let mut case: Option<CaseResponder> = None;
-    let mut case_local = SessionId(0);
-    // The fabric Sigma1 resolved from the destination identifier. Sigma3 validates the peer's
-    // certificate chain against *this* fabric's root.
-    let mut case_fabric = matter_kit::msg::FabricIndex(0);
-    let mut pase: Option<PaseResponder> = None;
-    let mut pase_local = SessionId(0);
-    // §5.5's gate: one handshake at a time, sixty seconds to finish it, twenty failures and
-    // the node leaves commissioning mode. Without it the second `PBKDFParamRequest` to arrive
-    // would replace the first — which is a session takeover, not a race.
-    let mut admission = PaseAdmission::new();
+    // The node's secure channel: §5.5's three admission rules, both handshakes, the session
+    // each produces and §4.11.1.1's eviction when there is no room for it. One handshake at a
+    // time is a property of the type rather than of this loop — without that rule the second
+    // `PBKDFParamRequest` to arrive would replace the first, which is a session takeover and
+    // not a race. It also keeps §6.2.3's attestation challenge, which PASE produces alongside
+    // the session keys and `AttestationRequest` signs over.
+    let mut channel = matter_kit::sc::Channel::new();
     // Whether a commissioning window was open last time round the loop, so that its *opening*
     // can be acted on. See the note at the top of the loop body.
     let mut window_was_open = false;
@@ -818,6 +835,10 @@ fn main() {
         // Where §4.8's AEAD is handed the protocol header and the payload joined together.
         // A datagram node needs exactly Core §4.4.4's 1280 octets and no more.
         let mut frame_buf = [0u8; 1280];
+        // §4.11.1.1 step 2a's `CloseSession` report to whichever session an installation had
+        // to evict. Its own buffer, because `out` is carrying the reply to the message that
+        // caused the eviction, and both have to go.
+        let mut evict_buf = [0u8; 1280];
 
         loop {
             let now = timer.now();
@@ -847,7 +868,7 @@ fn main() {
             // node's secure channel. The window opening is the observable fact.
             let window_open = window.borrow().open(now).is_some();
             if window_open && !window_was_open {
-                admission.reset();
+                channel.reopen();
                 println!("  commissioning window open — the channel admits PASE again");
             }
             window_was_open = window_open;
@@ -864,9 +885,8 @@ fn main() {
             // invitation to start another. Without a window this does not fire, so a
             // commissioned node with nothing open still refuses PASE — which is the point of
             // the rule.
-            if window_open && admission.is_established() && fail_safe.borrow().armed(now).is_none()
-            {
-                admission.closed();
+            if window_open && channel.is_established() && fail_safe.borrow().armed(now).is_none() {
+                channel.release();
                 println!("  commissioning finished and the window is open — PASE admitted again");
             }
 
@@ -1076,7 +1096,7 @@ fn main() {
             // place MRP's does — a timer the loop already waits on rather than a special case.
             let deadline = [
                 stack.wake_at(),
-                admission.deadline(),
+                channel.deadline(),
                 // §8.5.3's MaxInterval is a promise: a subscriber that hears nothing for longer
                 // than the interval it was granted considers the subscription dead. So the
                 // report deadline is a deadline like any other, and the loop waits on it.
@@ -1143,6 +1163,89 @@ fn main() {
                             continue;
                         }
                     };
+                    // §2.5.6.2: a group is reached at an address derived from the fabric id
+                    // and the group id, and a node that never joins it is a node no groupcast
+                    // ever reaches — the membership is in the Groups cluster and the socket
+                    // knows nothing about it. Re-joined after every interaction because
+                    // `AddGroup` is an interaction; the call is idempotent, and the cost is a
+                    // setsockopt on a table with four entries.
+                    for (fabric_id, group) in joined_groups(&fabrics, &groups_cluster) {
+                        let address = matter_kit::group::multicast_address(fabric_id, group);
+                        if joined.insert(address.addr) {
+                            match matter_socket.join_multicast(address.addr, scope_id) {
+                                Ok(()) => println!("  joined {group:?} at {address:?}"),
+                                Err(e) => println!("  could not join {group:?}: {e}"),
+                            }
+                        }
+                    }
+                    // §4.16.3: a group datagram belongs to no session, so `Messaging` hands it
+                    // back rather than routing it — the key is found by trying every installed
+                    // one whose Group Session ID matches (§4.17.3.6), which is what
+                    // `group::wire::receive` does. Without these twenty lines a node holds
+                    // group keys, joins the multicast address, and answers nothing sent to it.
+                    if let Received::Group { .. } = received {
+                        let mut original = [0u8; 1280];
+                        let keys = group_keys.borrow();
+                        let compressed = |index: matter_kit::msg::FabricIndex| {
+                            fabrics.borrow().find(index).map(|f| f.compressed)
+                        };
+                        let inbound = matter_kit::group::wire::receive(
+                            &mut matter_buf[..n],
+                            from,
+                            &keys,
+                            &mut group_peers,
+                            compressed,
+                            &mut original,
+                        );
+                        match inbound {
+                            Ok(matter_kit::group::wire::Received::Message(message)) => {
+                                // §8.7.2.3 and §1.3.7.1.2: a groupcast is acted on and never
+                                // answered. One multicast to twenty lights that each replied
+                                // would put twenty unicast responses on the link at once.
+                                let request = Request {
+                                    opcode: message.protocol.opcode,
+                                    payload: message.payload,
+                                    session: None,
+                                    exchange: message.protocol.exchange_id,
+                                    groupcast: true,
+                                };
+                                let subject = SubjectDescriptor::group(
+                                    message.context.fabric_index,
+                                    message.context.group,
+                                );
+                                let access = AclAccess::new(&acl, node, &subject);
+                                let server = Server::new(node, &access, &handler, 24)
+                                    .with_data_versions(&versions)
+                                    .with_events(&events);
+                                let ctx = InteractionContext::new()
+                                    .at(now)
+                                    .with_fabric(message.context.fabric_index)
+                                    .with_group(message.context.group);
+                                let mut dispatcher_cursor = ReadCursor::START;
+                                match dispatcher.dispatch(
+                                    &server,
+                                    request,
+                                    &ctx,
+                                    &mut dispatcher_cursor,
+                                    &mut scratch,
+                                    &mut payload,
+                                ) {
+                                    Ok(Served::Silent) => println!(
+                                        "  groupcast to {:?} acted on",
+                                        message.context.group
+                                    ),
+                                    Ok(other) => println!(
+                                        "  groupcast to {:?}: {other:?} — and nothing is sent",
+                                        message.context.group
+                                    ),
+                                    Err(e) => println!("  groupcast refused: {e}"),
+                                }
+                            }
+                            Ok(other) => println!("  group datagram dropped: {other:?}"),
+                            Err(e) => println!("  group datagram refused: {e}"),
+                        }
+                        continue;
+                    }
                     let (exchange, header, body) = match received {
                         Received::Message {
                             exchange,
@@ -1170,6 +1273,28 @@ fn main() {
                         // A chunked read is the exception: the client acknowledges each chunk
                         // and then asks for the next on the *same* exchange (§10.2.3), so the
                         // exchange is finished only when the series is.
+                        // §4.11.1.4: the peer has closed the session and `Messaging` has
+                        // closed this end — keys, counters and exchanges. What is left is
+                        // everything above that layer which was keyed on the session.
+                        Received::SessionClosed { session } => {
+                            // §8.5: a subscription reports *on a session*. One whose session
+                            // has gone has nowhere to report and would hold its slot until its
+                            // maximum interval ran out, on a device with `SUBSCRIPTIONS` of
+                            // them.
+                            let dropped = subscriptions.remove_for_session(Some(session));
+                            reporting.retain(|(_, sent_on)| sent_on.session != session);
+                            // §5.5 rule 1 is released by exactly this: "until session
+                            // establishment fails or the successfully established PASE session
+                            // is terminated on the commissioning channel".
+                            // §5.5: the channel is released by the session on it going away,
+                            // and the channel is the thing that knows which session that was.
+                            channel.closed(session);
+                            println!(
+                                "  peer closed session {session:?} — {dropped} subscription(s) \
+                                 went with it"
+                            );
+                            continue;
+                        }
                         Received::Acknowledged { exchange } => {
                             // Two series keep an exchange alive past the acknowledgement of a
                             // single message, and both of them are §10.2.3's chunking: a read
@@ -1193,231 +1318,64 @@ fn main() {
                             }
                             continue;
                         }
+                        // A variant added since this example was written: nothing here knows
+                        // what to do with it, and guessing is worse than saying so.
+                        other => {
+                            println!("  unhandled reception: {other:?}");
+                            continue;
+                        }
                     };
 
+                    // Set when installing a session had to evict one (§4.11.1.1). The report
+                    // is framed by then; it goes out after this message's own reply.
+                    let mut evicted_report: Option<matter_kit::messaging::Evicted> = None;
                     let reply = if header.protocol == ProtocolId::SECURE_CHANNEL {
-                        match header.opcode {
-                            // §5.5: one handshake at a time, sixty seconds to finish it,
-                            // twenty failures and the node leaves commissioning mode. Answering
-                            // every request unconditionally — which is the obvious thing to
-                            // write — lets a second commissioner replace an in-flight one and
-                            // finish the handshake in its place.
-                            opcode::PBKDF_PARAM_REQUEST => match admission.admit(true, now) {
-                                Admit::Admitted => {
-                                    // §11.19.8.1: an Enhanced window runs PASE against the
-                                    // verifier the *administrator* supplied, with that
-                                    // command's salt and iteration count — not the factory
-                                    // passcode. A node that answers with its own verifier
-                                    // while an ECM window is open is a node whose printed
-                                    // passcode still works after an administrator deliberately
-                                    // replaced it, which is the guarantee ECM exists to give.
-                                    // A Basic window carries no verifier and falls back to the
-                                    // factory one, which is what makes it Basic.
-                                    let ecm = window.borrow().ephemeral(now).and_then(|e| {
-                                        let v =
-                                            Spake2pVerifierData::from_bytes(&e.verifier).ok()?;
-                                        let p = PbkdfParameters::new(e.iterations, &e.salt).ok()?;
-                                        Some((v, p))
-                                    });
-                                    let (verifier, parameters) = match ecm {
-                                        Some((v, p)) => (v, p),
-                                        None => (verifier, parameters.clone()),
-                                    };
-                                    let mut responder = PaseResponder::new(
-                                        ResponderConfig {
-                                            verifier,
-                                            parameters,
-                                            session_params: Some(SessionParams::default()),
-                                        },
-                                        // A session id this node is not already using.
-                                        SessionId(rng.next_u32().expect("rng") as u16 | 1),
+                        // §5.5's admission rules, both handshakes, the session they produce and
+                        // §4.11.1.1's eviction, in one call. Every one of those used to be
+                        // written out here, and every one of them is a rule that belongs to the
+                        // node rather than to any handshake.
+                        let ctx = matter_kit::sc::ChannelContext {
+                            fabrics: &fabrics,
+                            keys: &keys,
+                            rng: &rng,
+                            window: &window,
+                            verifier: &verifier,
+                            parameters: &parameters,
+                            now,
+                        };
+                        let mut buffers = matter_kit::sc::ChannelBuffers {
+                            reply: &mut payload,
+                            frame: &mut frame_buf,
+                            evict: &mut evict_buf,
+                        };
+                        match channel.on_message(
+                            &mut stack,
+                            header.opcode,
+                            &body,
+                            &ctx,
+                            &mut buffers,
+                        ) {
+                            Ok(answered) => {
+                                evicted_report = answered.evicted;
+                                if let Some(established) = answered.established {
+                                    println!(
+                                        "  {:?} complete — session {:?}",
+                                        established.kind, established.session
                                     );
-                                    let mut random = [0u8; 32];
-                                    rng.fill(&mut random).expect("rng");
-                                    match responder.on_pbkdf_param_request(
-                                        &body,
-                                        &random,
-                                        &mut payload,
-                                    ) {
-                                        Ok(n) => {
-                                            pase_local = responder.local_session_id();
-                                            pase = Some(responder);
-                                            Ok((opcode::PBKDF_PARAM_RESPONSE, n))
-                                        }
-                                        // A request this node could not parse is a failed
-                                        // attempt like any other: it frees the channel, and it
-                                        // counts towards the twenty.
-                                        Err(e) => {
-                                            report_failure(&mut admission, &mut pase, &window);
-                                            Err(e)
-                                        }
+                                    // §11.18.6.8 step 10a binds the accessing fabric to a PASE
+                                    // session later; a CASE session arrives with one.
+                                    if established.kind == SessionKind::Case {
+                                        println!("    on fabric {:?}", established.fabric);
                                     }
                                 }
-                                // §4.11.1.3's codes: BUSY says "not now", which is true while
-                                // another commissioner holds the channel; the rest are refusals
-                                // that will not change until the device is put back into
-                                // commissioning mode.
-                                refusal => {
-                                    println!("  refused a PASE request: {refusal:?}");
-                                    let code = if matches!(refusal, Admit::Busy) {
-                                        SecureChannelCode::Busy
-                                    } else {
-                                        SecureChannelCode::InvalidParameter
-                                    };
-                                    StatusReport::secure_channel(code)
-                                        .encode(&mut payload)
-                                        .map(|n| (opcode::STATUS_REPORT, n))
-                                }
-                            },
-                            opcode::PAKE1 => {
-                                let mut random = [0u8; 32];
-                                rng.fill(&mut random).expect("rng");
-                                match pase.as_mut() {
-                                    Some(p) => {
-                                        let r = p
-                                            .on_pake1(&body, &random, &mut payload)
-                                            .map(|n| (opcode::PAKE2, n));
-                                        if r.is_err() {
-                                            report_failure(&mut admission, &mut pase, &window);
-                                        }
-                                        r
-                                    }
+                                match answered.reply {
+                                    Some((opcode, len)) => Ok((opcode, len)),
+                                    // A message for a handshake that is not running. Saying
+                                    // nothing is the answer, not an error.
                                     None => continue,
                                 }
                             }
-                            opcode::PAKE3 => match pase.as_mut() {
-                                Some(p) => match p.on_pake3(&body, &mut payload) {
-                                    Ok((n, keys)) => {
-                                        let keys_challenge = keys.attestation_challenge.clone();
-                                        // The commissioner's session id came from
-                                        // PBKDFParamRequest; PASE remembered it.
-                                        let peer = p.peer_session_id();
-                                        let session = SecureSession::new(
-                                            pase_local,
-                                            peer,
-                                            SessionKind::Pase,
-                                            Role::Responder,
-                                            keys,
-                                            rng.next_u32().expect("rng"),
-                                            now,
-                                        );
-                                        attestation_challenge = Some(keys_challenge);
-                                        if stack.sessions_mut().insert(session).is_err() {
-                                            println!("  no room for another session");
-                                            report_failure(&mut admission, &mut pase, &window);
-                                        } else {
-                                            println!("  PASE complete — session {pase_local:?}");
-                                            // §5.5 rule 1 holds "or has successfully
-                                            // established a session": the channel stays shut
-                                            // until this session is closed.
-                                            admission.established();
-                                        }
-                                        Ok((opcode::STATUS_REPORT, n))
-                                    }
-                                    Err(e) => {
-                                        report_failure(&mut admission, &mut pase, &window);
-                                        Err(e)
-                                    }
-                                },
-                                None => continue,
-                            },
-                            // §4.14.2.3's Sigma1: find the fabric whose destination identifier
-                            // the initiator computed, and answer with Sigma2. The scan is over
-                            // the fabrics `AddNOC` created, so a device answers CASE only for
-                            // an administrator it was actually commissioned by.
-                            opcode::SIGMA1 => {
-                                let mut random = [0u8; 32];
-                                let mut ephemeral = [0u8; 32];
-                                let mut resumption = [0u8; 16];
-                                rng.fill(&mut random).expect("rng");
-                                rng.fill(&mut ephemeral).expect("rng");
-                                rng.fill(&mut resumption).expect("rng");
-                                match serve_sigma1(
-                                    &fabrics,
-                                    &keys,
-                                    &body,
-                                    &random,
-                                    &ephemeral,
-                                    &resumption,
-                                    SessionId(rng.next_u32().expect("rng") as u16 | 1),
-                                    &mut payload,
-                                ) {
-                                    Ok((responder, local, fabric, n)) => {
-                                        case_local = local;
-                                        case_fabric = fabric;
-                                        case = Some(responder);
-                                        Ok((opcode::SIGMA2, n))
-                                    }
-                                    Err(e) => {
-                                        println!("  sigma1 refused: {e}");
-                                        case = None;
-                                        StatusReport::secure_channel(
-                                            SecureChannelCode::NoSharedTrustRoots,
-                                        )
-                                        .encode(&mut payload)
-                                        .map(|n| (opcode::STATUS_REPORT, n))
-                                    }
-                                }
-                            }
-                            opcode::SIGMA3 => match case.as_mut() {
-                                Some(responder) => {
-                                    match serve_sigma3(
-                                        responder,
-                                        &fabrics,
-                                        case_fabric,
-                                        &body,
-                                        &mut payload,
-                                    ) {
-                                        Ok((outcome, n)) => {
-                                            // Every identity the session needs comes from the
-                                            // outcome and the fabric, so it is built from both
-                                            // rather than field by field. `local_node_id` is
-                                            // the one that cannot be left out: §4.9.2's nonce
-                                            // carries the sender's operational node id, which
-                                            // is never in the header, so a session without it
-                                            // encrypts everything unreadably and the peer
-                                            // discards it without telling anyone.
-                                            let Some(fabric) = fabrics
-                                                .borrow()
-                                                .iter()
-                                                .find(|f| f.fabric_id == outcome.peer.fabric_id)
-                                                .cloned()
-                                            else {
-                                                println!("  no fabric for the CASE peer");
-                                                case = None;
-                                                continue;
-                                            };
-                                            let session = outcome.into_session(
-                                                case_local,
-                                                &fabric,
-                                                rng.next_u32().expect("rng"),
-                                                now,
-                                            );
-                                            if stack.sessions_mut().insert(session).is_err() {
-                                                println!("  no room for a CASE session");
-                                            } else {
-                                                println!(
-                                                    "  CASE complete — session {case_local:?} \
-                                                     for node {:?}",
-                                                    outcome.peer.node_id
-                                                );
-                                            }
-                                            case = None;
-                                            Ok((opcode::STATUS_REPORT, n))
-                                        }
-                                        Err(e) => {
-                                            println!("  sigma3 refused: {e}");
-                                            case = None;
-                                            Err(e)
-                                        }
-                                    }
-                                }
-                                None => continue,
-                            },
-                            other => {
-                                println!("  unhandled secure channel opcode {other:#04x}");
-                                continue;
-                            }
+                            Err(e) => Err(e),
                         }
                     } else if header.protocol == ProtocolId::INTERACTION_MODEL {
                         // A `StatusResponse` on a read that is not finished is the client
@@ -1485,7 +1443,7 @@ fn main() {
                             request,
                             now,
                             accessing_fabric,
-                            attestation_challenge.as_ref(),
+                            channel.attestation_challenge(),
                             interactions.get(exchange, now),
                             &mut subscriptions,
                             &subscription_ctx,
@@ -1538,6 +1496,12 @@ fn main() {
                                 cleanup,
                             ) => {
                                 println!("  fail-safe rolled back: {cleanup:?}");
+                                // §11.10.7.2.2 step 5 and everything like it: each cluster
+                                // reverts what it staged. One call rather than a list the
+                                // application has to keep in step with its own cluster set.
+                                handler.on_lifecycle(Lifecycle::FailSafeExpired {
+                                    fabric: cleanup.remove_fabric,
+                                });
                                 // Step 4: sessions for the fabric being reverted, but **after
                                 // the reply goes out**. `ArmFailSafe(0)` is itself a command
                                 // arriving on one of those sessions, and closing it first
@@ -1558,6 +1522,20 @@ fn main() {
                                 }
                             }
                             matter_kit::clusters::general_commissioning::Aftermath::Commissioned => {
+                                // §11.10.7.6: what the fail-safe was protecting is now
+                                // permanent. Every cluster that staged something drops the
+                                // snapshot it would otherwise revert to at the *next* expiry,
+                                // however many commissionings later that is.
+                                // §11.10.7.6 is CASE-only and fabric-matched, so the session
+                                // this arrived on names the fabric being committed.
+                                let committed = stack
+                                    .sessions()
+                                    .find(exchange.session)
+                                    .map(|s| s.fabric_index)
+                                    .filter(|i| i.0 != 0);
+                                if let Some(fabric) = committed {
+                                    handler.on_lifecycle(Lifecycle::CommissioningComplete(fabric));
+                                }
                                 println!("  commissioning complete");
                             }
                         }
@@ -1626,11 +1604,28 @@ fn main() {
                                 println!("  fabric {index:?} rotated its identity");
                             }
                             opcreds::FabricChange::Removed { index, .. } => {
-                                acl.borrow_mut().remove_fabric(index);
-                                // §11.2.7.4: a fabric's group keys go with the fabric. Leaving
-                                // them behind leaves key material for a fabric this node is no
-                                // longer on.
-                                group_keys.borrow_mut().remove_fabric(index);
+                                // §11.18.6.12: "SHALL remove all associated data". All of it —
+                                // access-control entries, group keys, bindings, scenes, group
+                                // memberships, and whatever else this device's clusters hold.
+                                // Broadcast to the handler rather than listed here, because a
+                                // list in the application goes stale the first time somebody
+                                // adds a cluster: fabric indices are reused, so an entry that
+                                // outlives its fabric is inherited by the next holder of that
+                                // index.
+                                handler.on_lifecycle(Lifecycle::FabricRemoved(index));
+                                // The node's own fabric-scoped state, which is not any
+                                // cluster's: subscriptions, and an administrative window this
+                                // fabric opened.
+                                subscriptions.remove_for_fabric(index);
+                                window.borrow_mut().forget_fabric(index);
+                                // The sessions wait. §11.18.6.12 has the node "send the
+                                // NOCResponse" and *then* terminate the sessions of the fabric
+                                // it removed — and the command usually arrives on one of them,
+                                // since an administrator removing its own fabric is the
+                                // ordinary case. Closing them here strands the reply on an
+                                // exchange that no longer exists, which the controller sees as
+                                // a timeout on a command the node has already carried out.
+                                close_sessions_for = Some(index);
                                 println!("  fabric {index:?} removed");
                             }
                         }
@@ -1715,11 +1710,34 @@ fn main() {
                         }
                         Err(e) => println!("  refused: {e}"),
                     }
+                    // §4.11.1.1 step 2a: the evicted peer is owed a `CloseSession`, and it is
+                    // owed it whether or not this node had anything else to say. Without it the
+                    // peer keeps a session this node has forgotten, and finds out at its next
+                    // message — which is a timeout rather than an error.
+                    if let Some(evicted) = evicted_report {
+                        // The other half of "all state associated with the session": a
+                        // subscription on an evicted session has nowhere left to report.
+                        subscriptions.remove_for_session(Some(evicted.session));
+                        reporting.retain(|(_, sent_on)| sent_on.session != evicted.session);
+                        match (evicted.peer, evicted.len) {
+                            (Some(matter_kit::platform::Peer::Udp(addr)), len) if len > 0 => {
+                                let _ = matter_socket.send_to(&evict_buf[..len], addr).await;
+                                println!("  evicted session {:?} to make room", evicted.session);
+                            }
+                            _ => println!(
+                                "  evicted session {:?}, with nowhere to report it",
+                                evicted.session
+                            ),
+                        }
+                    }
                     // Now the answer has gone, §11.10.7.2.2 step 4 may take the sessions with
                     // it. "Terminate any CASE session associated with the Fabric whose
                     // configuration is being reverted."
                     if let Some(index) = close_sessions_for {
-                        let closed = stack.sessions_mut().remove_fabric(index);
+                        // Through `Messaging`, so the exchanges on those sessions go too:
+                        // §4.13.3.1 removes "all state associated with the session", and an
+                        // exchange that outlives its session holds a slot nothing can answer on.
+                        let closed = stack.remove_fabric(index);
                         subscriptions.remove_for_fabric(index);
                         println!("  rollback closed {closed} session(s) for {index:?}");
                     }
@@ -1851,115 +1869,29 @@ fn main() {
                     // "If the PASE session is not established within the expected time window
                     // the Commissionee SHALL terminate the current session establishment using
                     // the INVALID_PARAMETER status code."
-                    if let Some(failure) = admission.poll(now) {
-                        println!("  PASE timed out after 60 s ({} failed)", failure.attempts);
-                        pase = None;
-                        if failure.exit_commissioning_mode {
-                            println!("  20 failed attempts — leaving commissioning mode");
-                            window.borrow_mut().close();
-                        }
-                    }
+                    channel.poll(now, &window);
                 }
             }
         }
     });
 }
 
-/// Records a failed PASE attempt, and leaves commissioning mode on the twentieth.
-///
-/// §5.5: "the Commissionee SHALL exit Commissioning Mode after 20 failed attempts." The
-/// responder is dropped either way — a half-finished handshake is not one a later message may
-/// resume, and keeping it would hold the channel against the next commissioner.
-fn report_failure(
-    admission: &mut PaseAdmission,
-    pase: &mut Option<PaseResponder>,
-    window: &RefCell<CommissioningWindow>,
-) {
-    *pase = None;
-    let failure = admission.failed();
-    println!("  PASE attempt {} failed", failure.attempts);
-    if failure.exit_commissioning_mode {
-        println!("  20 failed attempts — leaving commissioning mode");
-        window.borrow_mut().close();
-    }
-}
-
-/// Serves one interaction model message, returning the opcode and length of the answer.
-/// Answers a Sigma1 with a Sigma2 (§4.14.2.3).
-///
-/// The fabric is found by *destination identifier*: §4.14.2.4.1 makes it an HMAC an initiator can
-/// only compute if it already holds the fabric's IPK and one of this node's identities, which is
-/// what lets a device decide whether to spend an ECDH and a signature on a stranger. The scan is
-/// constant-time in `FabricTable`, so a near miss and a wild miss cost the same.
-#[allow(clippy::too_many_arguments)]
-fn serve_sigma1(
+/// Every (fabric id, group) this node is a member of, which is what §2.5.6.2 needs to derive
+/// the multicast addresses it should be listening on.
+fn joined_groups(
     fabrics: &RefCell<FabricTable<DefaultConfig, { DefaultConfig::FABRICS }>>,
-    keys: &RefCell<SoftKeyStore<8>>,
-    body: &[u8],
-    responder_random: &[u8; 32],
-    ephemeral_random: &[u8; 32],
-    resumption_random: &[u8; 16],
-    local: SessionId,
-    out: &mut [u8],
-) -> matter_kit::Result<(
-    CaseResponder,
-    SessionId,
-    matter_kit::msg::FabricIndex,
-    usize,
-)> {
-    let sigma1 = Sigma1::decode(body)?;
+    groups: &GroupTable<'_>,
+) -> Vec<(matter_kit::msg::FabricId, matter_kit::msg::GroupId)> {
     let table = fabrics.borrow();
-    let fabric = table
-        .find_by_destination_identifier(&sigma1.initiator_random, &sigma1.destination_id)?
-        .ok_or_else(|| matter_kit::Error::new(matter_kit::ErrorCode::NoSession))?;
-    // The NOC and ICAC this node presents are the ones `AddNOC` stored for that fabric.
-    let noc = fabric.credentials.noc.clone();
-    let icac = fabric.credentials.icac.clone();
-    let fabric = fabric.clone();
-    drop(table);
-
-    let mut responder = CaseResponder::new(local, Some(SessionParams::default()));
-    let n = responder.handle_sigma1(
-        &sigma1,
-        &fabric,
-        &noc,
-        icac.as_deref(),
-        &mut *keys.borrow_mut(),
-        ephemeral_random,
-        responder_random,
-        resumption_random,
-        out,
-    )?;
-    Ok((responder, local, fabric.index, n))
-}
-
-/// Accepts a Sigma3 and writes the `SigmaFinished` status report (§4.14.2.3).
-fn serve_sigma3(
-    responder: &mut CaseResponder,
-    fabrics: &RefCell<FabricTable<DefaultConfig, { DefaultConfig::FABRICS }>>,
-    fabric: matter_kit::msg::FabricIndex,
-    body: &[u8],
-    out: &mut [u8],
-) -> matter_kit::Result<(matter_kit::sc::CaseOutcome, usize)> {
-    let sigma3 = Sigma3::decode(body)?;
-    // The initiator's NOC is checked against *this fabric's* trusted root, which is the whole
-    // point of §4.14.2.3's Validate Sigma3: a chain that verifies against some other root is a
-    // chain from some other fabric's administrator.
-    //
-    // `fabric` is the one Sigma1 resolved from the destination identifier, not whichever the
-    // table happens to list first. Taking the first works perfectly on a node with one fabric
-    // and refuses *every* peer on the second — `cert: chain does not validate`, which reads
-    // like a bad certificate and is a chain checked against a stranger's root.
-    let table = fabrics.borrow();
-    let rcac = table
-        .find(fabric)
-        .map(|f| f.credentials.rcac.clone())
-        .ok_or_else(|| matter_kit::Error::new(matter_kit::ErrorCode::NoSession))?;
-    drop(table);
-    let root = MatterCertificate::decode(&rcac)?;
-    let outcome = responder.handle_sigma3(&sigma3, &root, None)?;
-    let n = responder.finished(out)?;
-    Ok((outcome, n))
+    groups
+        .memberships()
+        .iter()
+        .filter_map(|membership| {
+            table
+                .find(membership.fabric)
+                .map(|fabric| (fabric.fabric_id, membership.group))
+        })
+        .collect()
 }
 
 /// Serves one interaction-model message, driving §10.2.3's chunk series.
@@ -2005,7 +1937,7 @@ fn dispatch_one<A: matter_kit::im::AccessControl, H: matter_kit::im::ClusterHand
     // §9.10.9.1 needs it: "Exactly one of AdminNodeID and AdminPasscodeID SHALL be set,
     // depending on whether the change occurred via a CASE or PASE session". Left unset, every
     // access-control change names a passcode and the audit trail names nobody — and
-    // §11.30.7.1's `RequestCommissioningApproval` refuses outright.
+    // §11.26.6.1's `RequestCommissioningApproval` refuses outright.
     if let Some(peer) = subscription_ctx
         .peer_node_id
         .filter(|id| id.kind() == matter_kit::msg::NodeIdKind::Operational)

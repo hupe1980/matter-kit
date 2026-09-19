@@ -8,7 +8,7 @@ exclude = ["fuzz", "interop"]
 
 [package]
 name = "matter-kit"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["hupe1980"]
 edition = "2024"
 rust-version = "1.88"
@@ -22,7 +22,7 @@ documentation = "https://docs.rs/matter-kit"
 keywords = ["matter", "smart-home", "iot", "thread", "embedded"]
 categories = ["network-programming", "embedded", "encoding", "no-std"]
 readme = "README.md"
-exclude = ["specs/", "concepts/", "site/"]
+exclude = ["concepts/", "site/"]
 
 [features]
 # The default build is the certifiable device build: `no_std`, no allocation, UDP + MRP.
@@ -49,10 +49,10 @@ rustcrypto = [
     "dep:p256", "dep:elliptic-curve", "dep:rand_core",
 ]
 
-# Multi-threaded controllers. Swaps `sync::Shared`'s `RefCell` for a `std::sync::Mutex`, so a
+# Multi-threaded controllers. Swaps `sync::Shared`'s `RefCell` for a `std::sync::RwLock`, so a
 # controller's state is `Send + Sync` and its run future can be spawned on a work-stealing
-# runtime. A device never wants this: it is single-threaded by construction (D13), and a mutex
-# turns a double-borrow that would have panicked at the mistake into a deadlock elsewhere.
+# runtime. A device never wants this: it is single-threaded by construction, and a lock turns a
+# borrow bug that would have panicked at the mistake into one that waits somewhere else.
 sync-mutex = ["std"]
 
 # Core §2.13 provisional items. Never on by default: a provisional mechanism is not
@@ -71,7 +71,7 @@ log = ["dep:log"]
 defmt = ["dep:defmt", "heapless/defmt"]
 
 [dependencies]
-# Fixed-capacity collections. The whole crate is sized by `Config` (D3), and these are
+# Fixed-capacity collections. The whole crate is sized by `Config`, and these are
 # what a `Config` constant turns into: `heapless::Vec<T, N>` with `N` from the trait.
 heapless = { version = "0.9", default-features = false }
 bitflags = { version = "2.5", default-features = false }
@@ -105,8 +105,9 @@ socket2 = { version = "0.6", default-features = false, features = ["all"], optio
 hex = "0.4"
 hex-literal = "1"
 
-# Feature-gated tests. `required-features` rather than a `#![cfg]` in the file: the binary is
-# then not built at all under `--no-default-features`, instead of built empty.
+# Tests whose whole file needs a feature. `required-features` keeps the target from being built
+# at all under `--no-default-features`; the rest of `tests/` gates itself with a `#![cfg(...)]`
+# header, which builds an empty binary instead.
 [[test]]
 name = "spake2p_vectors"
 required-features = ["rustcrypto"]

@@ -50,6 +50,7 @@ use crate::im::{ClusterHandler, ClusterId, CommandId, InteractionContext, Status
 use crate::tlv::{Tag, TlvWriter};
 
 use super::Cluster;
+pub use super::Reading;
 use crate::clusters::generated::ethernet_network_diagnostics as spec_eth;
 
 pub use spec_eth::{ID, PHYRateEnum, PICS, REVISION, feature};
@@ -59,35 +60,6 @@ use spec_eth::attribute::{
     PHY_RATE, TIME_SINCE_RESET, TX_ERR_COUNT,
 };
 use spec_eth::command::RESET_COUNTS;
-
-/// What a driver can say about an attribute whose `null` means something (§11.16.6.1).
-///
-/// The three answers are genuinely different, and collapsing any two of them loses information a
-/// support engineer needs:
-///
-/// * [`Reading::Value`] — measured, and this is it.
-/// * [`Reading::NotOperational`] — measurable, but "the interface is not currently configured or
-///   operational", which is what the specification's `null` means.
-/// * [`Reading::Unsupported`] — this device does not report the attribute at all, so it must not
-///   appear in `AttributeList` either.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Reading<T> {
-    /// A measured value.
-    Value(T),
-    /// `null`: the interface is not configured or operational.
-    NotOperational,
-    /// The attribute is not implemented by this device.
-    #[default]
-    Unsupported,
-}
-
-impl<T> Reading<T> {
-    /// Whether the device reports this attribute at all.
-    #[must_use]
-    pub const fn is_supported(&self) -> bool {
-        !matches!(self, Self::Unsupported)
-    }
-}
 
 /// What a device's Ethernet interface can report (§11.16.6).
 ///
@@ -423,6 +395,25 @@ mod tests {
         assert_eq!(
             read(&packets, TX_ERR_COUNT),
             Err(Status::UnsupportedAttribute)
+        );
+    }
+
+    /// A device builds its `Optional` list from what its driver reports, and
+    /// [`Reading::is_supported`] is how it asks — the one question whose answer must match the
+    /// descriptor, because an attribute answered but not advertised is a number no client can
+    /// find, and one advertised but not answered is a read that fails.
+    #[test]
+    fn a_driver_can_be_asked_which_attributes_it_reports() {
+        assert!(Reading::Value(PHYRateEnum::Rate1G).is_supported());
+        assert!(
+            Reading::<bool>::NotOperational.is_supported(),
+            "null is a value the device reports, not a missing attribute"
+        );
+        assert!(!Reading::<bool>::Unsupported.is_supported());
+        assert_eq!(
+            Reading::<bool>::default(),
+            Reading::Unsupported,
+            "the default is the one a device that has not said otherwise should have"
         );
     }
 

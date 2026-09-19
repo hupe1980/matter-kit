@@ -226,6 +226,13 @@ impl<'a, const M: usize, const E: usize, const K: usize, const G: usize> Groupca
 impl<const M: usize, const E: usize, const K: usize, const G: usize> ClusterHandler
     for Groupcast<'_, M, E, K, G>
 {
+    /// §11.27.6.1: memberships are fabric-scoped, and a stale one keeps this node listening
+    /// on a multicast address for a fabric it has left.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

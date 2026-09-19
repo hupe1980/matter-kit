@@ -7,9 +7,10 @@
 //! `REPORT_DATA` decodes as nothing a client can use, and no test of the write itself notices.
 //!
 //! The rule that earns the module is §8.8.2.3's fourth: "If this action contains more
-//! CommandDataIB elements in the InvokeRequests list than are supported by the device (see
-//! MaxPathsPerInvoke), then a Status Response action with the INVALID_ACTION Status Code SHALL
-//! be submitted to the message layer and this interaction SHALL terminate." `MaxPathsPerInvoke`
+//! CommandDataIB elements in the InvokeRequests list than are supported by the device" — its
+//! `MaxPathsPerInvoke` — "then a Status Response action with the INVALID_ACTION Status Code
+//! SHALL be submitted to the message layer and this interaction SHALL terminate."
+//! `MaxPathsPerInvoke`
 //! defaults to 1, so a node that does not enforce it advertises one command per invoke and then
 //! executes as many as it is sent.
 

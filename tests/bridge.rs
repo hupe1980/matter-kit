@@ -496,7 +496,7 @@ fn keep_active(
 
 #[test]
 fn node_label_is_the_users_name_and_the_only_writable_attribute() {
-    // §11.1.6.6. The bridge's facts about the device are the *device's*; the label is the
+    // §11.1.5.6. The bridge's facts about the device are the *device's*; the label is the
     // person's, and it is the one thing a controller may change through this cluster.
     let cluster = BridgedDeviceBasicInformation::new(KNOWN, true);
     let mut buf = [0u32; 16];
@@ -540,7 +540,7 @@ fn node_label_is_the_users_name_and_the_only_writable_attribute() {
 
 #[test]
 fn a_label_longer_than_the_constraint_is_refused() {
-    // §11.1.6.6's "max 32". A bridge that truncated silently would report a name the user did
+    // §11.1.5.6's "max 32". A bridge that truncated silently would report a name the user did
     // not choose, and the user would have no way to tell.
     let cluster = BridgedDeviceBasicInformation::new(KNOWN, true);
     let mut buf = [0u32; 16];

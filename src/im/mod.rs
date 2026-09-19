@@ -11,8 +11,8 @@
 //! | | |
 //! |---|---|
 //! | [`status`] | §8.10's one-byte outcome codes |
-//! | [`path`] | the four path types, and what a wildcard is |
-//! | [`ib`] | all sixteen of §10.6's information blocks |
+//! | [`path`] | §10.6's four path blocks, and what a wildcard is |
+//! | [`ib`] | the twelve information blocks that are not paths |
 //! | [`message`] | §10.7's ten messages, and §10.2.1's opcodes |
 //! | [`server`] | §8.4.3.2's read processing, over a [`dm::Node`](crate::dm::Node) |
 //! | [`subscription`] | §8.5's subscriptions and §8.6's reporting engine |
@@ -86,8 +86,8 @@ pub use path::{
     EventId, EventPath, ListIndex, WildcardPathFlags,
 };
 pub use server::{
-    AccessControl, AllowAll, ClusterHandler, InteractionContext, Outcome, ReadCursor, ReadOutcome,
-    Server, WriteAction, WriteOp,
+    AccessControl, AllowAll, ClusterHandler, InteractionContext, Lifecycle, Outcome, ReadCursor,
+    ReadOutcome, Server, WriteAction, WriteOp,
 };
 pub use status::Status;
 pub use subscription::{

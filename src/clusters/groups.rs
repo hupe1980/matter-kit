@@ -281,6 +281,13 @@ impl<'a, const N: usize, I: Identifying, S: ScenePurge> Groups<'a, N, I, S> {
 }
 
 impl<const N: usize, I: Identifying, S: ScenePurge> ClusterHandler for Groups<'_, N, I, S> {
+    /// §1.3: group membership is fabric-scoped, and §1.3.7.4's rule that a group's scenes go
+    /// with the group applies here too — `remove_fabric` takes both.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

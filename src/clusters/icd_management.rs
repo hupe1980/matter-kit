@@ -866,6 +866,13 @@ impl<'a, C: Config, const N: usize, A: StayActive> IcdManagement<'a, C, N, A> {
 }
 
 impl<C: Config, const N: usize, A: StayActive> ClusterHandler for IcdManagement<'_, C, N, A> {
+    /// §9.16.6.4: registrations are per fabric, and each one holds a shared key. A
+    /// registration that outlives its fabric is key material for somebody who has left.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

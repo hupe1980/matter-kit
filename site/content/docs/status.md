@@ -23,6 +23,7 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 | PASE, StatusReport | Core §4.11, §4.14.1 | ✅ |
 | CASE, with resumption | Core §4.14.2 | ✅ |
 | Secure sessions | Core §4.13 | ✅ |
+| Session eviction, and CloseSession in both directions | Core §4.11.1.1, §4.11.1.4 | ✅ |
 | Session parameters, all nine fields | Core §4.13.1 | ✅ |
 | BTP: segmentation, receive window, keep-alive | Core §4.19 | ✅ |
 | BLE GATT service, commissionable advertisement | Core §4.19.4.2, §5.4.2.5 | ✅ |
@@ -47,7 +48,7 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 | Operational Credentials | Core §11.18, §6.4.10 | ✅ |
 | Network Commissioning | Core §11.9 | ✅ |
 | General Diagnostics, Software Diagnostics | Core §11.12, §11.13 | ✅ |
-| Ethernet, Wi-Fi and Thread Network Diagnostics | Core §11.14–11.16 | 📐 |
+| Ethernet, Wi-Fi and Thread Network Diagnostics | Core §11.14–11.16 | ✅ |
 | Administrator Commissioning | Core §11.19 | ✅ |
 | Network Recovery | Core §5.9, §11.10 | ✅ |
 | Joint Fabric: the CATs, cross-signing, the datastore | Core ch. 12, §11.24, §11.25 | ✅ |
@@ -121,7 +122,11 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 
 ## Verification
 
-1745 tests, twenty-seven fuzz targets clean, builds for `thumbv7em-none-eabihf` and
+A light linked for an nRF52840 occupies **88 KiB of flash and 39 KiB of RAM** — `.text` 85 688,
+`.rodata` 4 516, `.bss` 40 584 — measured by `./footprint/run.sh`, which builds the image and
+reads the sections out of it. No radio is in that image.
+
+1794 tests, twenty-seven fuzz targets clean, builds for `thumbv7em-none-eabihf` and
 `riscv32imac-unknown-none-elf`, and a full feature powerset. See
 [Testing](@/docs/testing.md) for what each of those actually checks.
 

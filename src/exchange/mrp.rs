@@ -297,12 +297,6 @@ impl Mrp {
         Ok(())
     }
 
-    /// Records that an outbound message carried a piggybacked acknowledgement, so no
-    /// standalone one is needed.
-    pub fn on_piggyback(&mut self) {
-        self.pending_ack = None;
-    }
-
     /// The counter that should be piggybacked on the next outbound message, if any.
     ///
     /// Taking it clears the pending acknowledgement: §4.12.2.2's "piggybacking outstanding

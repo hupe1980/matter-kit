@@ -34,6 +34,11 @@
 #[cfg(feature = "rustcrypto")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
 pub mod case;
+/// The node's own secure channel: §5.5's admission rules, both handshakes, and the session
+/// they produce. Needs the fabric table and the message layer, so it is gated like they are.
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod channel;
 #[cfg(feature = "rustcrypto")]
 mod pase;
 pub mod status;
@@ -44,6 +49,8 @@ pub use case::{
     MAX_SIGMA1, MAX_SIGMA2, MAX_SIGMA3, MAX_TBSDATA, ResumptionState, Sigma1, Sigma2, Sigma2Resume,
     Sigma3, TbeData, Transcript,
 };
+#[cfg(feature = "rustcrypto")]
+pub use channel::{Channel, ChannelBuffers, ChannelContext, ChannelReply, Established};
 #[cfg(feature = "rustcrypto")]
 pub(crate) use pase::Fields;
 #[cfg(feature = "rustcrypto")]
@@ -135,8 +142,7 @@ pub mod opcode {
 /// released CHIP SDK refuses an empty `session-parameter-struct`, because
 /// `PairingSession::DecodeSessionParametersIfPresent` calls `Next()` once without guarding
 /// it against `CHIP_END_OF_TLV` where every later call in the same function is guarded. A
-/// conformant struct is never empty, so conformance and interoperability close the same hole
-/// (D77).
+/// conformant struct is never empty, so conformance and interoperability close the same hole.
 ///
 /// **Receiving is the asymmetric half.** A peer older than 1.3 sends only tags 1–3, so
 /// `SessionParams::decode` — crate-private, because a peer's parameters reach this crate only
@@ -374,7 +380,7 @@ impl Default for SessionParams {
     ///
     /// A `Default` here was once the defect rather than the convenience: when every field was
     /// an `Option`, the derived `Default` was three `None`s and encoded to an empty structure
-    /// that every released CHIP SDK refuses (D77). It is safe now for a structural reason
+    /// that every released CHIP SDK refuses. It is safe now for a structural reason
     /// rather than a careful one — §4.13.1's tags 4-8 are mandatory, so they are plain fields,
     /// and there is no combination of this type that encodes to an empty container.
     fn default() -> Self {

@@ -9,11 +9,17 @@
 //!
 //! # Status
 //!
-//! Under construction and pre-1.0. A device can be commissioned into a fabric end to end,
-//! answer Reads, Writes and Invokes against a `const` data model, hold subscriptions,
-//! enforce §6.6's access control, and advertise itself over DNS-SD — with
-//! [`messaging`] composing the layers, so a datagram finds its session, exchange and
-//! protocol. What is missing is the application clusters. The
+//! Under construction and pre-1.0. A device can be commissioned into a fabric end to end — over
+//! IPv6, BLE, Wi-Fi PAF or NFC — answer Reads, Writes and Invokes against a `const` data model,
+//! hold subscriptions, enforce §6.6's access control, take part in groupcast, move a firmware
+//! image over BDX and advertise itself over DNS-SD, with [`messaging`] composing the layers so
+//! that a datagram finds its session, exchange and protocol. The CHIP SDK's own `chip-tool`
+//! commissions the `light` example through the whole of §5.5, and eleven of the CSA Test
+//! Harness's certification cases pass against it.
+//!
+//! What is missing is most of the application clusters' *behaviour* behind the generated
+//! descriptors, and the facades — `Node::builder`, `Controller` — that would turn the examples'
+//! hand-assembly into three lines. The
 //! [README](https://github.com/hupe1980/matter-kit#status) carries the layer-by-layer table;
 //! each module here states which sections it implements.
 //!
@@ -41,10 +47,11 @@
 //!
 //! **No runtime is chosen for you.** The crate is `async` over [`core::future`] and talks
 //! to the outside world through the traits in [`platform`]: sockets, timers, randomness,
-//! storage, cryptography. Embassy and Tokio appear in `examples/`, never in the dependency
-//! tree. One consequence worth having: every timeout in the specification — MRP backoff,
-//! the fail-safe, an intermittently-connected device's idle period — is driven by a
-//! [`platform::Timer`], so [`platform::sim`] runs an hour-long scenario in microseconds.
+//! storage, cryptography. No executor crate is in the dependency tree at all; `examples/`
+//! run on a `block_on` of their own. One consequence worth having: every timeout in the
+//! specification — MRP backoff, the fail-safe, an intermittently-connected device's idle
+//! period — is driven by a [`platform::Timer`], so [`platform::sim`] runs an hour-long
+//! scenario in microseconds.
 //!
 //! **Nothing panics on network input.** `unwrap`, `expect`, `panic!` and slice indexing
 //! are denied crate-wide; every parser returns [`Error`]. Resource exhaustion is a value
@@ -55,6 +62,13 @@
 //!
 //! The whole of PASE: a printed passcode becomes three shared keys, without the passcode
 //! ever crossing the wire. Needs the `rustcrypto` feature, which is on by default.
+//!
+//! The salt and iteration count below are the CHIP test vectors, so that this example is the
+//! protocol and nothing else. A product's are neither: §3.9 allows 1 000 to 100 000 iterations
+//! and the floor is what an offline attack on leaked verifier material is priced at, and a salt
+//! shared between devices shares its pre-computation with all of them. Draw the salt per device
+//! at manufacture and put the iteration count well above the minimum — `examples/light` does
+//! both.
 //!
 //! ```
 //! # #[cfg(feature = "rustcrypto")]

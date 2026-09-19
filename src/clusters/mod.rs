@@ -1,19 +1,15 @@
-//! The clusters every Matter node has (Core ch. 9 and ch. 11).
+//! Cluster behaviour, over the shapes in [`generated`] (Core ch. 9 and ch. 11).
 //!
-//! A node is not just a data model — it has to *answer*. These are the utility clusters that
-//! make a device commissionable and describable, implemented against the same
-//! [cluster descriptor](crate::dm::ClusterDescriptor) and
-//! [`ClusterHandler`] machinery an application cluster uses, so
+//! A node is not just a data model — it has to *answer*. [`generated`] has every cluster's
+//! shape; this module has the behaviour for the ones that have any, from the utility clusters
+//! that make a device commissionable and describable to the application clusters a product is
+//! built from. All of them are implemented against the same
+//! [cluster descriptor](crate::dm::ClusterDescriptor) and [`ClusterHandler`] machinery, so
 //! there is one mechanism and not a privileged one for the built-ins.
 //!
-//! | Cluster | Id | Section | Revision | Feature |
-//! |---|---|---|---|---|
-//! | [`descriptor`] | `0x001D` | §9.5 | 3 | |
-//! | [`basic_information`] | `0x0028` | §11.1 | 6 | |
-//! | [`general_commissioning`] | `0x0030` | §11.10 | 2 | |
-//! | [`network_commissioning`] | `0x0031` | §11.9 | 2 | |
-//! | `administrator_commissioning` | `0x003C` | §11.19 | 1 | `rustcrypto` |
-//! | `operational_credentials` | `0x003E` | §11.18 | 2 | `rustcrypto` |
+//! Each module below documents the section it implements, and takes its `ID`, `REVISION` and
+//! conformance from [`generated`] rather than restating them — a second copy of a number the
+//! specification moves is a number that is wrong after the next revision.
 //!
 //! # Composition
 //!
@@ -93,7 +89,7 @@
 //! runtime — the same dispatch a hand-written `match` would produce, without the chance of
 //! forgetting an arm.
 //!
-//! # Why these three carry state and the descriptors do not
+//! # Why these types carry state and the descriptors do not
 //!
 //! A [cluster descriptor](crate::dm::ClusterDescriptor) is the cluster's *shape* and lives
 //! in flash. What each type here adds is its *values* — a device's vendor name, its
@@ -154,10 +150,12 @@ pub mod ota_requestor;
 pub mod scenes;
 pub mod software_diagnostics;
 pub mod thermostat_suggestions;
+pub mod thread_network_diagnostics;
 #[cfg(feature = "rustcrypto")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
 pub mod tls;
 pub mod water_heater_management;
+pub mod wi_fi_network_diagnostics;
 
 #[cfg(feature = "rustcrypto")]
 pub use administrator_commissioning::AdministratorCommissioning;
@@ -196,6 +194,42 @@ pub(crate) fn decode_fields<'a, T: FromTlv<'a>>(fields: &'a [u8]) -> Result<T, S
             _ => Status::InvalidAction,
         })
     })
+}
+
+/// What a driver can say about a diagnostics attribute whose `null` means something.
+///
+/// The three network diagnostics clusters — [`ethernet_network_diagnostics`],
+/// [`wi_fi_network_diagnostics`] and [`thread_network_diagnostics`] — all have attributes that
+/// are *both* optional and nullable, and the specification gives the two states different
+/// meanings: `null` is "the interface is not currently configured or operational", and leaving
+/// the attribute out of `AttributeList` is "this device does not report it". `Option<Option<T>>`
+/// would say both and say neither clearly, so a driver returns this and names the three answers:
+///
+/// * [`Reading::Value`] — measured, and this is it.
+/// * [`Reading::NotOperational`] — measurable, but not right now; the specification's `null`.
+/// * [`Reading::Unsupported`] — not implemented on this device, so it must not appear in
+///   `AttributeList` either.
+///
+/// An attribute that is *mandatory* and nullable has only two of those answers, and its driver
+/// method returns [`Option`] instead — a type that cannot say "unsupported" about an attribute
+/// the specification requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reading<T> {
+    /// A measured value.
+    Value(T),
+    /// `null`: the interface is not configured or operational.
+    NotOperational,
+    /// The attribute is not implemented by this device.
+    #[default]
+    Unsupported,
+}
+
+impl<T> Reading<T> {
+    /// Whether the device reports this attribute at all.
+    #[must_use]
+    pub const fn is_supported(&self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
 }
 
 /// One cluster implementation, tagged with the id it answers for.
@@ -275,6 +309,13 @@ macro_rules! dispatch_tuple {
                     $(id if id == $name::ID => $slot.invoke(resolved, fields, ctx, w, tag),)+
                     _ => Err(UNMATCHED.into()),
                 }
+            }
+
+            /// Broadcast, not routed: a fabric going away is a fact about the node, and
+            /// every cluster in the tuple is downstream of it.
+            fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+                let ($($slot,)+) = self;
+                $($slot.on_lifecycle(event);)+
             }
         }
     };
@@ -394,6 +435,13 @@ macro_rules! endpoint_tuple {
                     return $slot.handler.invoke(resolved, fields, ctx, w, tag);
                 })+
                 Err(NO_ENDPOINT.into())
+            }
+
+            /// Every endpoint, not the one a path named: the node's endpoints are all on the
+            /// fabric that went away.
+            fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+                let Endpoints(($($slot,)+)) = self;
+                $($slot.handler.on_lifecycle(event);)+
             }
         }
     };

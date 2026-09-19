@@ -125,13 +125,13 @@ pub trait EvseHooks {
         0
     }
 
-    /// `SessionID` (§9.3.8.20) — increments once per plug-in.
+    /// `SessionID` (§9.3.8.20.1) — increments once per plug-in.
     fn session_id(&self) -> Option<u32>;
 
-    /// `SessionDuration` (§9.3.8.21), in seconds.
+    /// `SessionDuration` (§9.3.8.20.2), in seconds.
     fn session_duration(&self) -> Option<u32>;
 
-    /// `SessionEnergyCharged` (§9.3.8.22), in mWh.
+    /// `SessionEnergyCharged` (§9.3.8.20.3), in mWh.
     fn session_energy_charged(&self) -> Option<i64>;
 
     /// `SessionEnergyDischarged` — the `V2X` feature's counterpart.

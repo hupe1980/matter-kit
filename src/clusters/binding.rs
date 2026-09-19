@@ -121,7 +121,7 @@ impl Target {
         // §7.21.2's tables bound a cluster id, and §7.19.2.27 bounds an endpoint number:
         // "Endpoint numbers SHALL NOT be 0xFFFF". A binding naming either outside its range
         // points at nothing that could exist, and is stored, read back and never resolved —
-        // the same shape as an Access Control target, and the same answer (D100).
+        // the same shape as an Access Control target, and the same answer.
         if let Some(cluster) = self.cluster
             && !crate::dm::mei::cluster_is_valid(cluster)
         {
@@ -323,6 +323,13 @@ impl<C: Config, const N: usize> Binding<C, N> {
 }
 
 impl<C: Config, const N: usize> ClusterHandler for Binding<C, N> {
+    /// §9.6: the Binding table is fabric-scoped (`F`), so a removed fabric's targets go with
+    /// it — otherwise this node keeps trying to reach a peer on a fabric it has left.
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        if let crate::im::Lifecycle::FabricRemoved(fabric) = event {
+            self.remove_fabric(fabric);
+        }
+    }
     fn read(
         &self,
         resolved: &Resolved<'_>,

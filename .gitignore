@@ -20,11 +20,10 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Internal-only documents (not published) — the architecture notes and the backlog
+# Internal-only documents (not published) — the architecture notes and the backlog, plus
+# the CSA Matter specifications they cite under concepts/references/ (free to download from
+# csa-iot.org but not redistributable)
 concepts/
-
-# CSA Matter specifications (free to download from csa-iot.org but not redistributable)
-specs/
 
 # The CSA machine-readable data model, which `matter-gen` reads. On the same footing as the
 # PDFs: every file carries the CSA's own copyright notice, granting a licence to "view,
