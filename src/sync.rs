@@ -23,7 +23,7 @@
 //! **Never hold a borrow across an `await`.**
 //!
 //! That is the whole of it, in both builds, because [`RwLock`](std::sync::RwLock) is the shape
-//! [`RefCell`](core::cell::RefCell) already has: many shared borrows, or one exclusive borrow. A
+//! [`core::cell::RefCell`] already has: many shared borrows, or one exclusive borrow. A
 //! [`Mutex`](std::sync::Mutex) would have one kind of lock, so two `borrow()`s would compile and
 //! work without the feature and deadlock with it — and a seam whose two builds disagree about
 //! what is legal is a seam that tests one of them.
