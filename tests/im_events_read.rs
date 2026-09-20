@@ -433,12 +433,8 @@ fn a_second_report_does_not_resend_the_first_reports_events() {
     use matter_kit::platform::Instant;
 
     let mut store = store_with(&[(STARTED, EventPriority::Info, None)]);
-    use matter_kit::{Config, DefaultConfig};
-    type Table = SubscriptionTable<
-        DefaultConfig,
-        { DefaultConfig::SUBSCRIPTIONS },
-        { DefaultConfig::SUB_PATHS },
-    >;
+    use matter_kit::DefaultConfig;
+    type Table = SubscriptionTable<DefaultConfig, 15, 3>;
     let mut table = Table::new();
     let events = [wildcard()];
     let id = table

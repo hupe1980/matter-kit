@@ -50,7 +50,7 @@ use matter_kit::sc::{
 use matter_kit::session::{EstablishedKeys, Role, SecureSession, SessionKind};
 use matter_kit::tlv::{ContainerKind, Tag, TlvWriter};
 
-type Stack = Messaging<DefaultConfig, 4, 8>;
+type Stack = Messaging<DefaultConfig>;
 
 const PASSCODE: u32 = 20_202_021;
 const SALT: &[u8] = b"SPAKE2P Key Salt";
@@ -196,7 +196,7 @@ fn a_commissioner_pairs_and_then_invokes_a_cluster_over_the_session_it_establish
     // "All PASE messages are sent using an Unsecured Session: The Session ID field SHALL be
     // set to 0." The exchange is opened on session 0 and everything below flows through it.
     let out = commissioner
-        .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+        .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
         .expect("open");
 
     // 1. PBKDFParamRequest.
@@ -468,7 +468,7 @@ fn a_lost_pase_message_is_retransmitted_and_the_repeat_is_not_acted_on_twice() {
     let mut device = Stack::new(0x1000, 0x200, 9);
 
     let out = commissioner
-        .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+        .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
         .expect("open");
     let mut wire = Wire::new();
     send(

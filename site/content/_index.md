@@ -1,6 +1,6 @@
 +++
 title = "matter-kit"
-description = "A Matter 1.6 protocol implementation in Rust: one crate, no_std, no allocation, and no runtime of its own. Sizing is a trait, not a build flag, and nothing panics on network input."
+description = "A Matter 1.6 protocol implementation in Rust: one crate, no_std, no allocation, and no runtime of its own. A node that could not pass certification does not compile, and nothing panics on network input."
 template = "index.html"
 
 [extra]
@@ -12,8 +12,8 @@ title = "One crate"
 body = "Not a family to keep in version step. Everything optional is a Cargo feature, and the code generator is repository tooling rather than a dependency."
 
 [[extra.pillars]]
-title = "Sizing is a type"
-body = "Every table is a fixed-capacity array whose length comes from a Config trait. The specification's minima are const assertions, so a node that could not pass certification does not compile."
+title = "A capacity is checked against the specification"
+body = "Every table is a fixed-capacity array, and each one asserts at compile time that it can keep the per-fabric promises the node advertises. A node that could not pass certification does not compile, and the build error names the rule it breaks."
 
 [[extra.pillars]]
 title = "No runtime is chosen for you"
@@ -21,18 +21,18 @@ body = "async over core::future, reaching the outside world through small traits
 
 [[extra.pillars]]
 title = "Nothing panics on network input"
-body = "unwrap, expect, panic! and slice indexing are denied crate-wide. Resource exhaustion is a value, so a device that runs out of exchanges answers BUSY rather than aborting."
+body = "unwrap, expect, panic!, slice indexing, unchecked arithmetic and truncating casts are denied crate-wide. Resource exhaustion is a value, so a device that runs out of exchanges answers BUSY rather than aborting."
 +++
 
 ```rust
-use matter_kit::Config;
+use matter_kit::{DefaultConfig, acl::Acl};
 
-struct Light;
-impl Config for Light {
-    const FABRICS: usize = 5;      // Core §11.18.5.3 constrains this to 5..=254
-    const SESSIONS: usize = 16;    // Core §4.14.2.8 wants ≥ 3 per fabric
-    // …everything else defaults.
-}
+// Four entries for each of five fabrics is §2.11.1.1's minimum, and the default.
+let acl: Acl<DefaultConfig> = Acl::new();
+
+// error: Acl: Core §2.11.1.1 promises ACL_ENTRIES_PER_FABRIC to every fabric,
+//        so the list must hold FABRICS × that many
+let too_small: Acl<DefaultConfig, 4, 4, 3> = Acl::new();
 ```
 
 Cargo features cannot do this. They are global and additive, so two crates in one binary

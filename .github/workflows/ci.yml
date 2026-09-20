@@ -21,6 +21,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The figure the documents quote. `--features std` leaves `provisional`, `paf`, `nfc`
+      # and `sync-mutex` off, so without this the Groupcast cluster, Wi-Fi PAF and NFC have
+      # tests that nothing here runs — the powerset only `check`s them.
+      - run: cargo test --all-features
       - run: cargo test --features std
       # The default build is the one a device ships: no_std, no allocation. Its tests are
       # the ones that must not quietly depend on `std` having been linked by something
@@ -111,6 +115,11 @@ jobs:
       # The budgets in the script are regression gates rather than specification limits: a
       # change that costs ten kilobytes has to raise them deliberately.
       - run: ./footprint/run.sh --top 20
+      # This is the one job that has a linked image, so it is the one place the footprint
+      # figure in `README.md` can be checked against the image it describes. `run.sh` writes
+      # `footprint/last.json` and this reads it; the Stated numbers job checks everything else
+      # and reports the footprint as unmeasured, which leaves the document's own figure alone.
+      - run: cargo xtask stats --check
 
   lint:
     name: Lint
@@ -324,6 +333,29 @@ jobs:
       # specification it claims to be. A cluster revision that moved upstream fails here
       # rather than at a certification lab.
       - run: cargo xtask check --dm /tmp/chip/data_model/1.6
+
+  stats:
+    name: Stated numbers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Every number these documents state about the repository, produced rather than typed.
+      # They drifted three times before this existed, and none of the three would have misled
+      # anybody — which is the argument rather than a defence of them: a number no reader can
+      # reproduce is a number no reader checks, and the ones that matter are the stable ones
+      # nobody re-runs.
+      #
+      # The footprint is reported as `unmeasured` here rather than checked, because linking an
+      # image is the Footprint job's business and this one should not need a cross toolchain.
+      - run: cargo xtask stats --check
+      # The specification index, which is generated from the `§` references in `src/` and must
+      # therefore be regenerated when they move. It is not a coverage score — a percentage taken
+      # from citations measures how much the crate talks about the specification, which anybody
+      # can move by writing a comment — but it is the only view that shows a chapter nothing
+      # names.
+      - run: cargo xtask coverage --check
 
   deny:
     name: Licenses and advisories

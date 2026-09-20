@@ -25,6 +25,7 @@
 
 use core::cell::{Cell, RefCell};
 
+use matter_kit::DefaultConfig;
 use matter_kit::acl::{Acl, Entry};
 use matter_kit::clusters::access_control::AccessControl;
 use matter_kit::clusters::binding::{Binding, Target};
@@ -36,12 +37,11 @@ use matter_kit::group::{GroupKeySecurityPolicy, GroupKeySet, GroupKeys, IPK_KEY_
 use matter_kit::im::{ClusterHandler, InteractionContext, Lifecycle, Status};
 use matter_kit::msg::{FabricIndex, NodeId};
 use matter_kit::tlv::{Tag, TlvWriter};
-use matter_kit::{Config, DefaultConfig};
 
 const A: FabricIndex = FabricIndex(1);
 const B: FabricIndex = FabricIndex(2);
 
-type Entries = Acl<DefaultConfig, { DefaultConfig::ACL_ENTRIES }, 4, 3>;
+type Entries = Acl<DefaultConfig, 20, 4, 3>;
 
 /// A cluster that records what it was told, standing in for the ones whose fabric-scoped
 /// state is only reachable through their own commands.
@@ -79,7 +79,7 @@ impl matter_kit::clusters::Cluster for Witness {
 
 fn populate(
     acl: &RefCell<Entries>,
-    keys: &RefCell<GroupKeys<8, 8>>,
+    keys: &RefCell<GroupKeys<DefaultConfig>>,
     binding: &Binding<DefaultConfig, 8>,
 ) {
     for fabric in [A, B] {
@@ -110,7 +110,7 @@ fn populate(
 #[test]
 fn removing_a_fabric_reaches_every_cluster_in_the_handler() {
     let acl = RefCell::new(Entries::new());
-    let keys = RefCell::new(GroupKeys::<8, 8>::new(4, 3));
+    let keys = RefCell::new(GroupKeys::<DefaultConfig>::new());
     let binding: Binding<DefaultConfig, 8> = Binding::new(4);
     let witness = Witness::default();
     populate(&acl, &keys, &binding);

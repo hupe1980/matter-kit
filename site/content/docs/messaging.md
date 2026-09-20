@@ -10,7 +10,10 @@ two halves — "Message Transmission" and "Message Reception" — and `matter_ki
 those two halves and nothing else.
 
 ```rust,ignore
-let mut stack = Messaging::<MyConfig, SESSIONS, EXCHANGES>::new(
+// The two const parameters size the session and exchange tables, and default to a node that
+// satisfies every specification minimum for five fabrics. A table too small for the node's
+// `Config` is a build error naming the rule it breaks.
+let mut stack = Messaging::<MyConfig>::new(
     rng.next_u16(), rng.next_u16(), rng.next_u32(),
 );
 
@@ -27,6 +30,25 @@ match stack.receive(&mut datagram, from, now)? {
 // Outbound.
 let (len, counter) = stack.send(exchange, opcode, reliable, payload, now, rng.next_u32(), &mut out)?;
 ```
+
+## Before a key exists, the initiator has to say who it is
+
+PASE and CASE both run on the *unsecured* session, and §4.13.2.1 gives that session exactly one
+piece of state: an Ephemeral Initiator Node ID, which the initiator "encloses as Source Node ID
+and responder as Destination Node ID". A message carrying neither is one the specification tells
+the receiver to discard — and the CHIP SDK does.
+
+So there is one door, and it opens the exchange and the context together:
+
+```rust,ignore
+// A commissioner starting PASE against a device it has just found.
+let exchange = stack.open_unsecured_to(ProtocolId::SECURE_CHANNEL, peer, now, rng.next_u64())?;
+```
+
+`Messaging::open` on `SessionId::UNSECURED` without a context answers `InvalidState` rather than
+handing back an exchange whose every message is unroutable. §4.13.2.1 also requires a *new*
+ephemeral id for each unsecured session, so a node that runs PASE and then CASE against the same
+peer calls `close_unsecured` in between.
 
 ## Reception is not a decode
 

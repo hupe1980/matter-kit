@@ -2078,12 +2078,7 @@ fn the_case_admin_subject_becomes_the_entry_that_keeps_the_node_administrable() 
     use matter_kit::dm::Privilege;
     use matter_kit::msg::NodeId;
 
-    type TestAcl = Acl<
-        DefaultConfig,
-        { DefaultConfig::ACL_ENTRIES },
-        { DefaultConfig::ACL_SUBJECTS },
-        { DefaultConfig::ACL_TARGETS },
-    >;
+    type TestAcl = Acl<DefaultConfig>;
 
     let owned = owned();
     let device = device(&owned);

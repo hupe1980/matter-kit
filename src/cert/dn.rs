@@ -407,6 +407,10 @@ impl<'a> DistinguishedName<'a> {
 
     /// Every `matter-noc-cat` in the DN, in order.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a NOC CAT is the low 32 bits of a matter-noc-cat DN value (§6.5.6.3)"
+    )]
     pub fn noc_cats(&self) -> Vec<CaseAuthenticatedTag, MAX_NOC_CATS> {
         let mut out = Vec::new();
         for attribute in &self.attributes {

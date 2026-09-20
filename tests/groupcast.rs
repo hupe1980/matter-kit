@@ -19,9 +19,13 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
+use matter_kit::DefaultConfig;
 use matter_kit::crypto::SymmetricKey;
 use matter_kit::fabric::{CompressedFabricId, operational_group_key};
 use matter_kit::group::keys::{EpochKey, GroupKeySecurityPolicy, GroupKeySet, GroupKeys};
@@ -32,12 +36,13 @@ use matter_kit::msg::{FabricIndex, GroupId, NodeId, ProtocolHeader, ProtocolId};
 use matter_kit::platform::PeerAddr;
 
 const F1: FabricIndex = FabricIndex(1);
+const F2: FabricIndex = FabricIndex(2);
 const COMPRESSED: CompressedFabricId = CompressedFabricId(0x87E1_B004_E235_A130);
 const LIGHTS: GroupId = GroupId(0x0001);
 const SWITCH: NodeId = NodeId(0x0000_0000_0000_AAAA);
 const FROM: PeerAddr = PeerAddr::new([0xFD, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xAA]);
 
-type Keys = GroupKeys<4, 8>;
+type Keys = GroupKeys<DefaultConfig>;
 type Peers = PeerTable<4, 2>;
 
 fn compressed(_: FabricIndex) -> Option<CompressedFabricId> {
@@ -46,7 +51,7 @@ fn compressed(_: FabricIndex) -> Option<CompressedFabricId> {
 
 /// A key table with one key set holding one epoch key, mapped to the lights group.
 fn table(key: [u8; 16], policy: GroupKeySecurityPolicy) -> Keys {
-    let mut keys = Keys::new(4, 3);
+    let mut keys = Keys::new();
     let mut epoch_keys = heapless::Vec::new();
     epoch_keys
         .push(EpochKey {
@@ -267,7 +272,7 @@ fn a_colliding_session_id_does_not_decide_the_key() {
     let mut sender = Sender::restore(SWITCH, 1000, 5000);
     let mut datagram = send(&mut sender, &sender_keys, b"turn on", false);
 
-    let mut receiver_keys = Keys::new(4, 3);
+    let mut receiver_keys = Keys::new();
     for (id, key) in [(3u16, decoy), (7, EPOCH)] {
         let mut epoch_keys = heapless::Vec::new();
         epoch_keys
@@ -544,9 +549,17 @@ fn a_group_cannot_map_to_a_key_set_that_does_not_exist() {
     );
 }
 
+/// §11.2.6.3's `MaxGroupKeysPerFabric` is a quota, and it is the quota the cluster *advertises*.
+///
+/// The fixture is the node's real one. The quota is `Config`'s and the table is asserted at
+/// compile time to have room for it — §2.11.1.2's minimum is three per fabric — so the only way
+/// to reach the edge is to walk to it.
 #[test]
 fn the_per_fabric_quota_is_enforced() {
-    let mut keys = Keys::new(1, 1);
+    use matter_kit::Config;
+
+    let quota = DefaultConfig::GROUP_KEYS_PER_FABRIC;
+    let mut keys = Keys::new();
     let mut epoch_keys = heapless::Vec::new();
     epoch_keys
         .push(EpochKey {
@@ -554,24 +567,47 @@ fn the_per_fabric_quota_is_enforced() {
             start_time_us: 1,
         })
         .unwrap();
-    let set = GroupKeySet {
+
+    for id in 0..quota {
+        keys.write_key_set(GroupKeySet {
+            fabric_index: F1,
+            id: id as u16 + 1,
+            policy: GroupKeySecurityPolicy::TrustFirst,
+            epoch_keys: epoch_keys.clone(),
+        })
+        .unwrap_or_else(|e| panic!("set {id} is inside the fabric's quota of {quota}: {e:?}"));
+    }
+
+    // Writing an id the fabric already holds is a replacement, not a new set, so it stays inside
+    // the quota however often it is repeated (§11.2.7.1).
+    keys.write_key_set(GroupKeySet {
         fabric_index: F1,
-        id: 7,
+        id: 1,
         policy: GroupKeySecurityPolicy::TrustFirst,
         epoch_keys: epoch_keys.clone(),
-    };
-    keys.write_key_set(set.clone()).unwrap();
-    // A second set on the same fabric is past the quota; the same id again is a replacement.
-    keys.write_key_set(set).unwrap();
+    })
+    .expect("replacing an existing set does not spend quota");
+
+    // One past it is refused, and the status is the one §8.10 gives for a resource limit.
     assert_eq!(
         keys.write_key_set(GroupKeySet {
-            id: 8,
             fabric_index: F1,
+            id: quota as u16 + 1,
             policy: GroupKeySecurityPolicy::TrustFirst,
-            epoch_keys,
+            epoch_keys: epoch_keys.clone(),
         }),
         Err(matter_kit::im::Status::ResourceExhausted)
     );
+
+    // And the quota is *per fabric*: a second fabric still gets its own full share, which is the
+    // whole reason the limit is not simply the table's length.
+    keys.write_key_set(GroupKeySet {
+        fabric_index: F2,
+        id: 1,
+        policy: GroupKeySecurityPolicy::TrustFirst,
+        epoch_keys,
+    })
+    .expect("another fabric's quota is its own");
 }
 
 #[test]

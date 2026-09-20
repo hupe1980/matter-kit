@@ -111,8 +111,13 @@ Err(SubscribeError::Full)        => { /* also RESOURCE_EXHAUSTED — but a diffe
 ```
 
 Both answer `RESOURCE_EXHAUSTED`, because there is no status code for "not yours". They are
-separate variants so that an integrator reading a log can tell "buy a bigger `Config`" from
-"this administrator is using more than its share".
+separate variants so that an integrator reading a log can tell "the table wants to be longer"
+from "this administrator is using more than its share" — and only the first is a number to
+change.
+
+The share itself is `Config::SUBSCRIPTIONS_PER_FABRIC`, and the table is asserted at compile time
+to hold `FABRICS` × that many. A node cannot advertise a guarantee it has no room for, which is
+what `SubscriptionsPerFabric` in `CapabilityMinima` would otherwise be.
 
 A subscription with **no accessing fabric** — over PASE — is the one case the specification
 leaves open: permitted "subject to available resources", a `MAY`. It gets only what is not

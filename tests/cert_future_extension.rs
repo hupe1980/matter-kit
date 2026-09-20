@@ -3,7 +3,7 @@
 //! These three certificates were issued by the **CHIP SDK's own test framework** during a run
 //! of `interop/chip/python.sh`, and captured off the wire. They are what the Test Harness calls
 //! *maximized* certificates: deliberately grown to the limits §6.1.3 sets — 400 octets of TLV
-//! for the RCAC and ICAC, against 600 of DER — by padding them with a §6.5.11.7
+//! for the RCAC and ICAC, against 600 of DER — by padding them with a §6.5.11.6
 //! `future-extension` holding a `subjectAltName` full of `A`s.
 //!
 //! That padding is the point. R12 is the risk that this crate cannot regenerate somebody
@@ -14,7 +14,7 @@
 //! certificate with a future extension in it. This crate refused these outright, which meant it
 //! could not be commissioned by the reference implementation's test framework at all.
 //!
-//! §6.5.11.7 is what makes the fix a re-emission rather than a reconstruction: the field "SHALL
+//! §6.5.11.6 is what makes the fix a re-emission rather than a reconstruction: the field "SHALL
 //! be an exact copy of the DER encoded extension field (including the DER encoded ASN.1 OID of
 //! the extension)", and the extensions "SHALL be encoded in the same order as they appeared in
 //! the original X.509 certificate". So the octets already are the extension, and putting them

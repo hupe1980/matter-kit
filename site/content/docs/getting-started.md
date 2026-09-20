@@ -19,25 +19,59 @@ Message Reliability Protocol, and the RustCrypto software backend.
 | `alloc` | | Growable collections, and the TCP transport with its large payloads. |
 | `std` | | Sockets, a file-backed key-value store, `std::error::Error`. Implies `alloc`. |
 | `log` / `defmt` | | Logging backends. Pick one. |
-| `provisional` | | Specification §2.13 provisional items. Never certifiable; may change in a 1.6.x revision. |
+| `provisional` | | Mechanisms the specifications call provisional — Core §2.13's ten, and the Application Cluster and Device Library lists. Never certifiable; may change in a dot revision. Without it, furnishing one is reported by `Cluster::validate` as a defect, so a certifiable build is the default build. |
 
 Minimum supported Rust version is **1.88**, edition 2024.
 
 ## Size the node
 
-Every table in the stack is a fixed-capacity array. The capacities come from one trait, and
-the specification's minima are `const` assertions — a configuration that could not pass
-certification fails to compile rather than failing certification.
+Every table in the stack is a fixed-capacity array whose length is its own const parameter, and
+every one of those parameters defaults to the specification's minimum — so a node that names no
+numbers at all is a conformant one:
+
+```rust
+use matter_kit::{DefaultConfig, acl::Acl, im::SubscriptionTable};
+
+let acl: Acl<DefaultConfig> = Acl::new();
+let subscriptions: SubscriptionTable<DefaultConfig> = SubscriptionTable::new();
+```
+
+`Config` carries what a capacity cannot tell you: how much of it each *fabric* is owed. Those
+are the numbers the node advertises — `SupportedFabrics`, `SubscriptionsPerFabric`,
+`AccessControlEntriesPerFabric`, `MaxGroupsPerFabric` — so they are promises rather than sizes.
 
 ```rust
 use matter_kit::Config;
 
 struct Light;
 impl Config for Light {
-    const FABRICS: usize = 5;      // Core §11.18.5.3 constrains this to 5..=254
-    const SESSIONS: usize = 16;    // Core §4.14.2.8 wants ≥ 3 per fabric
-    // …everything else defaults.
+    const FABRICS: usize = 5;                  // Core §11.18.5.3 constrains this to 5..=254
+    const SUBSCRIPTIONS_PER_FABRIC: usize = 3; // Core §2.11.2.2 — a guarantee, not a cap
+    // …everything else defaults to the specification's own minimum.
 }
+```
+
+A table that cannot keep those promises is a **build error**, not a certification failure:
+
+```rust,compile_fail
+use matter_kit::{DefaultConfig, acl::Acl};
+
+// error: Acl: Core §2.11.1.1 promises ACL_ENTRIES_PER_FABRIC to every fabric,
+//        so the list must hold FABRICS × that many
+let too_small: Acl<DefaultConfig, 4, 4, 3> = Acl::new();
+```
+
+And the numbers the node puts on the wire come from the tables themselves, never from a constant
+written beside them — §11.1.4.4 requires each `CapabilityMinima` field to be "the **actual**"
+figure the node supports:
+
+```rust
+use matter_kit::clusters::basic_information::CapabilityMinima;
+use matter_kit::{DefaultConfig, im::SubscriptionTable, session::SessionTable};
+
+type Sessions = SessionTable<DefaultConfig, 16>;
+type Subs = SubscriptionTable<DefaultConfig>;
+let minima = CapabilityMinima::from_tables::<DefaultConfig, Sessions, Subs>();
 ```
 
 ## Describe the device

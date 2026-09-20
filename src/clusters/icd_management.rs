@@ -286,6 +286,10 @@ impl Registration {
     /// tag version is bumped — and the device starts sending check-ins to a client that is
     /// sitting there subscribed.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "§9.16.5.2's monitored subject is matched against a CAT, which is 32 bits (§6.5.6.3)"
+    )]
     pub fn matches_subscriber(&self, node: NodeId, cats: &[u32]) -> bool {
         if self.monitored_subject & CAT_MASK != CAT_PREFIX {
             return self.monitored_subject == node.0;
@@ -578,14 +582,16 @@ impl StayActive for GrantRequested {
 
 /// The ICD Management cluster's state (§9.16.6).
 ///
-/// `N` is the total number of registrations across every fabric; `clients_per_fabric` is what
-/// §9.16.6.6 publishes and what any one fabric may use, so that the first fabric to register
-/// cannot leave a later one unable to.
+/// `N` is the total number of registrations across every fabric, and
+/// [`Config::ICD_CLIENTS_PER_FABRIC`] is what §9.16.6.6 publishes and what any one fabric may
+/// use, so that the first fabric to register cannot leave a later one unable to.
+/// [`IcdManagement::CHECK`] refuses at compile time an `N` too small for every fabric to have
+/// its share — the attribute is a promise, and a promise the table cannot keep is the defect
+/// this whole shape exists to stop.
 #[derive(Debug)]
-pub struct IcdManagement<'a, C: Config, const N: usize, A: StayActive = GrantRequested> {
+pub struct IcdManagement<'a, C: Config, const N: usize = 5, A: StayActive = GrantRequested> {
     clients: RefCell<heapless::Vec<Registration, N>>,
     counter: RefCell<u32>,
-    clients_per_fabric: u16,
     timings: Timings,
     features: Feature,
     operating_mode: RefCell<OperatingMode>,
@@ -598,24 +604,36 @@ pub struct IcdManagement<'a, C: Config, const N: usize, A: StayActive = GrantReq
 impl<'a, C: Config, const N: usize> IcdManagement<'a, C, N, GrantRequested> {
     /// A cluster for a device that grants every `StayActiveRequest` in full.
     #[must_use]
-    pub const fn new(features: Feature, timings: Timings, clients_per_fabric: u16) -> Self {
-        Self::with_stay_active(features, timings, clients_per_fabric, GrantRequested)
+    pub const fn new(features: Feature, timings: Timings) -> Self {
+        Self::with_stay_active(features, timings, GrantRequested)
     }
 }
 
 impl<'a, C: Config, const N: usize, A: StayActive> IcdManagement<'a, C, N, A> {
+    /// Compile-time proof that the registration table can keep §9.16.6.6's promise.
+    ///
+    /// > This attribute SHALL indicate the maximum number of entries that the server is able to
+    /// > store for each fabric in the RegisteredClients attribute.
+    ///
+    /// "For each fabric", so the table needs `FABRICS × ICD_CLIENTS_PER_FABRIC` slots. Without
+    /// this, `ClientsSupportedPerFabric` is a number a device states and a table that cannot
+    /// honour it — and the fabric that finds out is the last one to register.
+    pub const CHECK: () = {
+        let () = crate::config::AssertValid::<C>::CHECK;
+        assert!(
+            N >= C::ICD_CLIENTS_PER_FABRIC * C::FABRICS,
+            "IcdManagement: §9.16.6.6 promises ICD_CLIENTS_PER_FABRIC registrations to every \
+             fabric, so the table must hold FABRICS × that many"
+        );
+    };
+
     /// A cluster whose device decides how long it can stay awake.
     #[must_use]
-    pub const fn with_stay_active(
-        features: Feature,
-        timings: Timings,
-        clients_per_fabric: u16,
-        stay_active: A,
-    ) -> Self {
+    pub const fn with_stay_active(features: Feature, timings: Timings, stay_active: A) -> Self {
+        let () = Self::CHECK;
         Self {
             clients: RefCell::new(heapless::Vec::new()),
             counter: RefCell::new(0),
-            clients_per_fabric,
             timings,
             features,
             // §9.16.6: a device that does not support LIT is always SIT.
@@ -799,7 +817,7 @@ impl<'a, C: Config, const N: usize, A: StayActive> IcdManagement<'a, C, N, A> {
             // crate that can still do that.
             None => {
                 let used = clients.iter().filter(|c| c.fabric_index == fabric).count();
-                if used >= usize::from(self.clients_per_fabric) {
+                if used >= C::ICD_CLIENTS_PER_FABRIC {
                     return Err(Status::ResourceExhausted.into());
                 }
                 clients
@@ -913,7 +931,7 @@ impl<C: Config, const N: usize, A: StayActive> ClusterHandler for IcdManagement<
                 if !self.features.contains(Feature::CHECK_IN_PROTOCOL_SUPPORT) {
                     return Err(Status::UnsupportedAttribute);
                 }
-                full(w.unsigned(tag, u64::from(self.clients_per_fabric)))
+                full(w.unsigned(tag, C::ICD_CLIENTS_PER_FABRIC as u64))
             }
             USER_ACTIVE_MODE_TRIGGER_HINT => {
                 if !self.features.contains(Feature::USER_ACTIVE_MODE_TRIGGER) {

@@ -280,14 +280,40 @@ impl SecureSession {
 
 /// The fixed-capacity set of established sessions.
 #[derive(Debug)]
-pub struct SessionTable<C: Config, const N: usize> {
+pub struct SessionTable<C: Config, const N: usize = 16> {
     sessions: Vec<SecureSession, N>,
     /// The next local session id to hand out.
     next_id: u16,
     _config: PhantomData<C>,
 }
 
+impl<C: Config, const N: usize> crate::config::Capacity for SessionTable<C, N> {
+    const TOTAL: usize = N;
+    /// §11.1.4.4's `CaseSessionsPerFabric`: the sessions this table guarantees each fabric.
+    ///
+    /// The whole table divided among the fabrics, with no rounding up. §4.14.2.8 sets the
+    /// floor at three and [`SessionTable::CHECK`] refuses a smaller table at compile time, so
+    /// this never has to be clamped — and clamping is what would turn a table that is too small
+    /// into an attribute that lies about it.
+    const PER_FABRIC: usize = N / C::FABRICS;
+}
+
 impl<C: Config, const N: usize> SessionTable<C, N> {
+    /// Compile-time proof that this table can keep §4.14.2.8's promise.
+    ///
+    /// > A node SHALL support at least 3 CASE session contexts per fabric.
+    ///
+    /// Referenced by [`SessionTable::new`], so a table too small for the node's `Config` fails
+    /// the build at the first place one is constructed.
+    pub const CHECK: () = {
+        let () = AssertValid::<C>::CHECK;
+        assert!(
+            N >= 3 * C::FABRICS,
+            "SessionTable: Core §4.14.2.8 requires at least 3 CASE sessions per fabric — \
+             raise the table's N, or lower Config::FABRICS"
+        );
+    };
+
     /// An empty table whose first session id is `first_id`.
     ///
     /// §4.13.2.4 requires a fresh local session id that does not collide with a live one;
@@ -295,7 +321,7 @@ impl<C: Config, const N: usize> SessionTable<C, N> {
     /// across a reboot.
     #[must_use]
     pub fn new(first_id: u16) -> Self {
-        let () = AssertValid::<C>::CHECK;
+        let () = Self::CHECK;
         Self {
             sessions: Vec::new(),
             next_id: first_id,
@@ -397,7 +423,9 @@ mod tests {
     use super::*;
     use crate::DefaultConfig;
 
-    type Table = SessionTable<DefaultConfig, 4>;
+    // The specification's own minimum for five fabrics: §4.14.2.8's three CASE sessions each,
+    // plus one for the PASE that commissions the next. `SessionTable::CHECK` refuses less.
+    type Table = SessionTable<DefaultConfig>;
 
     fn keys() -> EstablishedKeys {
         EstablishedKeys::derive(b"shared secret", &[]).expect("derive")
@@ -507,12 +535,18 @@ mod tests {
 
     #[test]
     fn a_full_table_is_a_value_not_an_abort() {
+        // Driven by the table's own capacity rather than by a number typed here: the table is
+        // sized by the specification's minimum for five fabrics, and a test that filled a
+        // hard-coded four would stop testing fullness the moment that minimum moved.
+        let capacity = <Table as crate::config::Capacity>::TOTAL;
         let mut t = Table::new(1);
-        for id in 1..=4 {
-            t.insert(session(id, Role::Initiator)).expect("fits");
+        for id in 1..=capacity {
+            t.insert(session(id as u16, Role::Initiator)).expect("fits");
         }
         assert_eq!(
-            t.insert(session(9, Role::Initiator)).unwrap_err().code(),
+            t.insert(session(capacity as u16 + 1, Role::Initiator))
+                .unwrap_err()
+                .code(),
             ErrorCode::NoSpace
         );
     }

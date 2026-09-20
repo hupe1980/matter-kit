@@ -25,11 +25,7 @@ use matter_kit::im::subscription::SubscriptionTable;
 use matter_kit::platform::Instant;
 use matter_kit::tlv::{Tag, TlvWriter};
 
-type Table = SubscriptionTable<
-    DefaultConfig,
-    { DefaultConfig::SUBSCRIPTIONS },
-    { DefaultConfig::SUB_PATHS },
->;
+type Table = SubscriptionTable<DefaultConfig>;
 
 fuzz_target!(|data: &[u8]| {
     let now = Instant::from_micros(1_000_000);

@@ -9,7 +9,10 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic
+    clippy::panic,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use core::cell::RefCell;
@@ -1341,15 +1344,22 @@ fn capability_minima_carries_the_revision_6_fields_by_default() {
     );
 }
 
+// `session` is behind `rustcrypto`, and `CapabilityMinima` is derived from the session table.
+#[cfg(feature = "rustcrypto")]
 #[test]
-fn capability_minima_from_config_reports_the_tables_it_describes() {
-    // The numbers in §11.1.4.4 are what the node *guarantees*, and those are `Config`'s — so
-    // they come from `Config` rather than from a product's imagination. A hand-written figure
-    // beside a `Config` stops being true the first time a size changes, and nothing would say
-    // so: the attribute is read once, at commissioning, by a client that believes it.
-    use matter_kit::config::{Config, DefaultConfig};
+fn capability_minima_reports_the_tables_it_describes() {
+    // §11.1.4.4 says each field is "the **actual**" number the node supports, so every one of
+    // them has exactly one honest source: the table that will have to honour it. A figure taken
+    // from `Config` instead would describe whatever the integrator wrote beside it — and this
+    // attribute is read once, at commissioning, by a client that believes it.
+    use matter_kit::config::{Capacity, Config, DefaultConfig, SubscriptionCapacity};
+    use matter_kit::im::SubscriptionTable;
+    use matter_kit::session::SessionTable;
 
-    let minima = CapabilityMinima::from_config::<DefaultConfig>();
+    type Sessions = SessionTable<DefaultConfig, 16>;
+    type Subs = SubscriptionTable<DefaultConfig>;
+
+    let minima = CapabilityMinima::from_tables::<DefaultConfig, Sessions, Subs>();
     assert_eq!(
         minima.read_paths,
         Some(DefaultConfig::READ_PATHS as u16),
@@ -1357,13 +1367,20 @@ fn capability_minima_from_config_reports_the_tables_it_describes() {
     );
     assert_eq!(
         minima.subscribe_paths,
-        Some(DefaultConfig::SUB_PATHS as u16)
+        Some(<Subs as SubscriptionCapacity>::PATHS as u16),
+        "SubscribePathsSupported must be the table's own path width"
     );
     assert_eq!(
         minima.subscriptions_per_fabric,
-        DefaultConfig::SUBSCRIPTIONS_PER_FABRIC as u16
+        <Subs as Capacity>::PER_FABRIC as u16
     );
-    // §4.14.2.8's floor of three per fabric holds however the table is divided.
+    assert_eq!(
+        minima.case_sessions_per_fabric,
+        <Sessions as Capacity>::PER_FABRIC as u16,
+        "CaseSessionsPerFabric is the session table divided among the fabrics, not a floor"
+    );
+    // §4.14.2.8's floor of three per fabric — which `SessionTable::CHECK` is what guarantees,
+    // so this assertion can be about the real number rather than about a clamp.
     assert!(minima.case_sessions_per_fabric >= 3);
     assert!(minima.simultaneous_invocations.is_some_and(|n| n >= 1));
     assert!(minima.simultaneous_writes.is_some_and(|n| n >= 1));

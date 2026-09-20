@@ -16,11 +16,15 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use core::cell::RefCell;
 
+use matter_kit::DefaultConfig;
 use matter_kit::clusters::group_key_management::{self as gkm, GroupKeyManagement, GroupTable};
 use matter_kit::dm::spec::Optional;
 use matter_kit::dm::{ClusterDescriptor, Endpoint, Node};
@@ -50,8 +54,8 @@ impl GroupTable for Memberships {
     }
 }
 
-type Keys = GroupKeys<4, 8>;
-type Cluster<'a> = GroupKeyManagement<'a, Memberships, 4, 8>;
+type Keys = GroupKeys<DefaultConfig>;
+type Cluster<'a> = GroupKeyManagement<'a, DefaultConfig, Memberships>;
 
 struct Fixture {
     node: Node<'static>,
@@ -68,7 +72,7 @@ fn fixture() -> Fixture {
     let endpoints: &'static [Endpoint<'static>] = Box::leak(Box::new([Endpoint::new(0, clusters)]));
     Fixture {
         node: Node::new(endpoints),
-        keys: RefCell::new(Keys::new(4, 3)),
+        keys: RefCell::new(Keys::new()),
         table: Memberships,
     }
 }

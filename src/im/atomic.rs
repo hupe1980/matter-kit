@@ -113,7 +113,7 @@ pub struct Claim<const A: usize> {
     pub writer: Writer,
     /// The attributes it covers.
     pub attributes: Vec<AttributeId, A>,
-    /// When it lapses if no `CommitWrite` arrives (§7.15.6.4.3.e.iii).
+    /// When it lapses if no `CommitWrite` arrives (§7.15.6.4 BeginWrite step 3(e)(iii)).
     pub deadline: Instant,
 }
 
@@ -202,14 +202,14 @@ impl<C: Config, const N: usize, const A: usize> AtomicWrites<C, N, A> {
 
     /// §7.15.6.4's `BeginWrite`.
     ///
-    /// The per-attribute statuses §7.15.6.4.3.a asks for are the *cluster's* to produce — only
-    /// it knows whether an attribute supports atomic writes or whether it has room to pend a
-    /// value. What this decides is the two rules that are about the table:
+    /// The per-attribute statuses §7.15.6.4 BeginWrite step 3(a) asks for are the *cluster's*
+    /// to produce — only it knows whether an attribute supports atomic writes or whether it
+    /// has room to pend a value. What this decides is the two rules that are about the table:
     ///
     /// * a client already holding a claim on the same cluster and endpoint is
-    ///   [`Status::InvalidInState`] (§7.15.6.4.3.1);
+    ///   [`Status::InvalidInState`] (§7.15.6.4 BeginWrite step 1);
     /// * an attribute another client is already using is [`Status::Busy`]
-    ///   (§7.15.6.4.3.a.iii).
+    ///   (§7.15.6.4 BeginWrite step 3(a)(iii)).
     ///
     /// `attributes` must be non-empty and free of duplicates — §7.15.6.4's rules 1 and 2, both
     /// [`Status::InvalidCommand`].
@@ -238,12 +238,12 @@ impl<C: Config, const N: usize, const A: usize> AtomicWrites<C, N, A> {
             }
         }
 
-        // §7.15.6.4.3.1: one claim per client per cluster instance.
+        // §7.15.6.4 BeginWrite step 1: one claim per client per cluster instance.
         if self.find(endpoint, cluster, writer).is_some() {
             return Err(Status::InvalidInState);
         }
-        // §7.15.6.4.3.a.iii: "If the specified attribute is currently being used by a
-        // different atomic write, the status SHALL be BUSY."
+        // §7.15.6.4 BeginWrite step 3(a)(iii): "If the specified attribute is currently being
+        // used by a different atomic write, the status SHALL be BUSY."
         for id in attributes {
             if self.holder(endpoint, cluster, *id).is_some() {
                 return Err(Status::Busy);
@@ -351,7 +351,8 @@ impl<C: Config, const N: usize, const A: usize> AtomicWrites<C, N, A> {
         }
     }
 
-    /// Drops every claim whose timeout has passed, returning how many (§7.15.6.4.3.e.iii).
+    /// Drops every claim whose timeout has passed, returning how many — §7.15.6.4 BeginWrite
+    /// step 3(e)(iii).
     ///
     /// > If the server does not receive a matching AtomicRequest with a RequestType of
     /// > CommitWrite from the associated client before the timeout … the server SHALL roll
@@ -460,7 +461,7 @@ mod tests {
 
     #[test]
     fn a_second_claim_on_the_same_cluster_by_the_same_client_is_refused() {
-        // §7.15.6.4.3.1: one claim per client per cluster instance.
+        // §7.15.6.4 BeginWrite step 1: one claim per client per cluster instance.
         let mut table = Table::new();
         table
             .begin(EP, THERMOSTAT, alice(), &[HEAT], timeout(), at(0))
@@ -473,8 +474,8 @@ mod tests {
 
     #[test]
     fn an_attribute_another_client_has_claimed_is_busy() {
-        // §7.15.6.4.3.a.iii. `BUSY` rather than a flat refusal because the client "could
-        // attempt to write to it again after a pause" — it says *try later*, not *never*.
+        // §7.15.6.4 BeginWrite step 3(a)(iii). `BUSY` rather than a flat refusal because the
+        // client "could attempt to write to it again after a pause" — try later, not never.
         let mut table = Table::new();
         table
             .begin(EP, THERMOSTAT, alice(), &[HEAT], timeout(), at(0))
@@ -532,8 +533,8 @@ mod tests {
 
     #[test]
     fn a_claim_that_is_never_committed_lapses() {
-        // §7.15.6.4.3.e.iii. Without it a client that crashed mid-write would hold its
-        // attributes against everyone else until the device restarted.
+        // §7.15.6.4 BeginWrite step 3(e)(iii). Without it a client that crashed mid-write would
+        // hold its attributes against everyone else until the device restarted.
         let mut table = Table::new();
         table
             .begin(EP, THERMOSTAT, alice(), &[HEAT], timeout(), at(0))

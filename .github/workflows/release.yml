@@ -77,14 +77,59 @@ jobs:
       # licensing problem rather than a large download.
       - run: cargo package --locked --list
 
+  # A machine-readable bill of materials for exactly what this version resolves.
+  #
+  # Not a nicety. From 11 December 2027 a manufacturer placing a product on the EU market owes a
+  # machine-readable SBOM covering at least its top-level dependencies, and a manufacturer's SBOM
+  # is the union of its dependencies'. Publishing ours means a supplier building on this crate
+  # does not have to reconstruct it — and it is generated from `Cargo.lock`, which is the same
+  # file every gate above ran against.
+  #
+  # CycloneDX because that is the format commercial tooling and procurement questionnaires
+  # accept; SPDX is the government-facing alternative and would be a second artefact saying the
+  # same thing.
+  sbom:
+    name: SBOM
+    needs: [verify, gate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cyclonedx
+      # `--all-features` so the document covers every dependency any consumer can reach, rather
+      # than the ones the default feature set happens to pull in. An SBOM that omits the crypto
+      # backend describes a build almost nobody makes.
+      - run: cargo cyclonedx --all-features --format json --spec-version 1.5
+      - run: |
+          set -euo pipefail
+          mv matter-kit.cdx.json "matter-kit-${{ needs.verify.outputs.version }}.cdx.json"
+          echo "components: $(jq '.components | length' "matter-kit-${{ needs.verify.outputs.version }}.cdx.json")"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: matter-kit-*.cdx.json
+          if-no-files-found: error
+
   publish:
     name: Publish to crates.io
-    needs: [verify, gate, package]
-    # Only a tag publishes. A dispatch run stops here, having packaged and verified.
+    needs: [verify, gate, package, sbom]
+    # Only a tag publishes. A dispatch run stops here, having packaged, verified and produced an
+    # SBOM — so the rehearsal exercises everything except the irreversible step.
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
-    # A protected environment is where the token lives, so publishing can require a review
-    # and the secret is not readable by a workflow on a fork or a branch.
+    # Trusted Publishing: the workflow proves its identity to crates.io over OIDC and is handed a
+    # token that is revoked when the run ends. `id-token: write` is what lets it ask for the
+    # assertion, and it is the whole reason there is no `CARGO_REGISTRY_TOKEN` secret to steal,
+    # leak, or forget to rotate. crates.io matches on the repository, the workflow file *and* the
+    # environment below, so a workflow added on a branch cannot publish.
+    permissions:
+      id-token: write
+      contents: read
+    # A protected environment, so publishing can require a review and is not reachable from a
+    # fork or an arbitrary branch.
     environment:
       name: crates-io
       url: https://crates.io/crates/matter-kit
@@ -92,31 +137,64 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # This needs one setup step outside the repository, and it fails loudly rather than
+      # silently if it is missing: on crates.io, under the crate's Settings → Trusted
+      # Publishing, add a GitHub publisher for `hupe1980/matter-kit`, workflow `release.yml`,
+      # environment `crates-io`. Until that exists there is no token to exchange for. The
+      # crate's own `CARGO_REGISTRY_TOKEN` secret can be deleted once a release has gone
+      # through this way — that is the point of it.
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - run: cargo publish --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
   release:
     name: GitHub release
-    needs: [verify, publish]
+    needs: [verify, publish, sbom]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      # A shallow checkout is enough: `generate_release_notes` is computed by GitHub's API
-      # from the commits between tags, not from local history, so the full clone this used to
-      # take was for a changelog nothing generates here.
+      # Checkout first: `actions/checkout` cleans the workspace, so a download before it would
+      # be deleted by it.
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sbom
+      # The notes are `CHANGELOG.md`'s own section for this version, not a list of commits.
+      #
+      # This repository keeps a changelog on purpose — it is the one place a crate user is told
+      # what moved between published versions, in their vocabulary rather than in the
+      # maintainer's. Generating notes from commits alongside it would publish a *second*
+      # account of the same release, and the one people read would be the one nobody wrote.
+      #
+      # A missing section is a failure rather than a fallback: a release with no changelog entry
+      # is a release whose notes nobody wrote, and discovering that after the upload is too late.
+      - name: Release notes from the changelog
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/          { exit }
+            found                      { print }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          echo "notes: $(wc -l < RELEASE_NOTES.md) lines"
       # No `.crate` attached. crates.io is where the crate is distributed, and a copy here
       # would be built by a different invocation from the one that published — two sets of
       # bytes for one version, with this release attesting to the set nobody installed.
-      #
-      # Notes generated from the commits, not from a file: a changelog kept by hand is a
-      # second record of what happened, and the two disagree on the release where it matters.
       - uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
+          # The SBOM rides with the release rather than with the crate: crates.io distributes
+          # the source, and this is the document about what that source resolves to.
+          files: matter-kit-*.cdx.json
           # A pre-1.0 version is a pre-release, and the marking is what keeps it out of
           # "latest" for anyone who reads that as a recommendation.
           prerelease: ${{ startsWith(needs.verify.outputs.version, '0.') }}

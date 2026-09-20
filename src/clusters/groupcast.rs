@@ -38,6 +38,7 @@
 use core::cell::RefCell;
 
 use crate::clusters::generated::groupcast as spec_gc;
+use crate::config::Config;
 use crate::crypto::{SYMMETRIC_KEY_LENGTH_BYTES, SymmetricKey};
 use crate::dm::spec::{Conforming, Optional};
 use crate::dm::{Resolved, ResolvedCommand};
@@ -65,7 +66,7 @@ pub const FEATURE_LISTENER: u32 = 1 << 0;
 /// `SD` (§11.27.4.2) — the node can send to groups it belongs to.
 pub const FEATURE_SENDER: u32 = 1 << 1;
 
-/// `PGA` (§11.27.4.3) — the node can use §2.5.6.2's per-group multicast addresses.
+/// `PGA` (§11.27.4, bit 2) — the node can use §2.5.6.2's per-group multicast addresses.
 pub const FEATURE_PER_GROUP_ADDRESS: u32 = 1 << 2;
 
 /// §11.27.7.1: "For Listeners, this field SHALL list at least 1 endpoint and up to 20
@@ -128,8 +129,15 @@ pub struct Membership<const E: usize> {
 /// [`group_key_management`](super::group_key_management) — §11.27.7.1's `Key` field creates a
 /// key set there, and §11.27.6.1 has the two attributes mirror each other.
 #[derive(Debug)]
-pub struct Groupcast<'a, const M: usize, const E: usize, const K: usize, const G: usize> {
-    keys: &'a RefCell<GroupKeys<K, G>>,
+pub struct Groupcast<
+    'a,
+    C: Config,
+    const M: usize,
+    const E: usize,
+    const K: usize = 15,
+    const G: usize = 20,
+> {
+    keys: &'a RefCell<GroupKeys<C, K, G>>,
     memberships: RefCell<heapless::Vec<Membership<E>, M>>,
     feature_map: u32,
     max_membership: u16,
@@ -137,14 +145,20 @@ pub struct Groupcast<'a, const M: usize, const E: usize, const K: usize, const G
     fabric_under_test: core::cell::Cell<FabricIndex>,
 }
 
-impl<'a, const M: usize, const E: usize, const K: usize, const G: usize> Groupcast<'a, M, E, K, G> {
+impl<'a, C: Config, const M: usize, const E: usize, const K: usize, const G: usize>
+    Groupcast<'a, C, M, E, K, G>
+{
     /// A cluster with no memberships, over the node's group keys.
     ///
     /// `feature_map` says which of `LN`, `SD` and `PGA` this node implements, and §11.27.4's
     /// `O.a+` requires at least one of the first two — a node that is neither a listener nor a
     /// sender has no business having the cluster.
     #[must_use]
-    pub const fn new(keys: &'a RefCell<GroupKeys<K, G>>, feature_map: u32) -> Self {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "§11.27.6.2's MaxMembershipCount is a uint16, and the branch above holds M to it"
+    )]
+    pub const fn new(keys: &'a RefCell<GroupKeys<C, K, G>>, feature_map: u32) -> Self {
         Self {
             keys,
             memberships: RefCell::new(heapless::Vec::new()),
@@ -223,8 +237,8 @@ impl<'a, const M: usize, const E: usize, const K: usize, const G: usize> Groupca
     }
 }
 
-impl<const M: usize, const E: usize, const K: usize, const G: usize> ClusterHandler
-    for Groupcast<'_, M, E, K, G>
+impl<C: Config, const M: usize, const E: usize, const K: usize, const G: usize> ClusterHandler
+    for Groupcast<'_, C, M, E, K, G>
 {
     /// §11.27.6.1: memberships are fabric-scoped, and a stale one keeps this node listening
     /// on a multicast address for a fabric it has left.
@@ -315,7 +329,9 @@ impl<const M: usize, const E: usize, const K: usize, const G: usize> ClusterHand
     }
 }
 
-impl<const M: usize, const E: usize, const K: usize, const G: usize> Groupcast<'_, M, E, K, G> {
+impl<C: Config, const M: usize, const E: usize, const K: usize, const G: usize>
+    Groupcast<'_, C, M, E, K, G>
+{
     /// §11.27.7.1, in the order the specification lists the steps.
     fn join(
         &self,
@@ -664,8 +680,8 @@ impl<const M: usize, const E: usize, const K: usize, const G: usize> Groupcast<'
 }
 
 /// So a tuple of clusters can dispatch to it by id.
-impl<const M: usize, const E: usize, const K: usize, const G: usize> Cluster
-    for Groupcast<'_, M, E, K, G>
+impl<C: Config, const M: usize, const E: usize, const K: usize, const G: usize> Cluster
+    for Groupcast<'_, C, M, E, K, G>
 {
     const ID: ClusterId = ID;
 }

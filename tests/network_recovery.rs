@@ -14,7 +14,9 @@
 //! * Refuse `CommissioningComplete` unless it arrives over the *operational* network — the one
 //!   thing the whole flow exists to restore.
 
-#![cfg(all(feature = "std", feature = "rustcrypto"))]
+// Network Recovery is provisional (Core §2.13.6), so the descriptor that furnishes its two
+// attributes exists only on a build that asked for provisional mechanisms.
+#![cfg(all(feature = "std", feature = "rustcrypto", feature = "provisional"))]
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,

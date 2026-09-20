@@ -136,7 +136,7 @@ fn a_zero_length_is_an_indefinite_length() {
 
 #[test]
 fn metadata_runs_to_the_end_of_the_payload() {
-    // §11.22.5.1.7: "The TLV metadata consumes the rest of the payload … after all previous
+    // §11.22.5.1: "The TLV metadata consumes the rest of the payload … after all previous
     // fields." There is no length in front of it, so the file designator's length is the only
     // thing separating the two variable fields.
     let mut init = Init::new(b"designator", 64);
@@ -908,4 +908,73 @@ fn a_success_report_does_not_end_a_transfer() {
     assert_eq!(read_report(&success).unwrap(), None);
     let other_protocol = [1, 0, 0x00, 0x00, 0x00, 0x00, 0x17, 0x00];
     assert_eq!(read_report(&other_protocol).unwrap(), None);
+}
+
+/// §11.22.5.2's `SendAccept` — the other half of the negotiation, and the one no flow in this
+/// crate drives.
+///
+/// OTA pulls: a requestor sends `ReceiveInit` and the provider answers `ReceiveAccept`, so
+/// `SendAccept` — the answer to a `SendInit`, where the *initiator* is the sender — was public
+/// surface nothing exercised. A protocol message pair with one half tested is a half somebody
+/// else's implementation will meet first.
+#[test]
+fn an_upload_negotiates_through_send_accept() {
+    let mut proposal = Init::new(b"image.ota", 8);
+    proposal.definite_length = Some(20);
+    proposal.control.sender_drive = true;
+    proposal.control.receiver_drive = false;
+
+    let limits = Limits {
+        available: Some(20),
+        ..Limits::default()
+    };
+    // `Upload` is the direction in which the initiator offers to *send*, so the responder
+    // answers with `SendAccept` rather than `ReceiveAccept` (§11.22.5.2).
+    let agreed = negotiate(Direction::Upload, &proposal, &limits).unwrap();
+    let accept = agreed.send_accept(&[]);
+    assert_eq!(
+        accept.max_block_size, 8,
+        "the responder kept the offered block size"
+    );
+    assert!(accept.control.sender_drive, "the offered mode is kept");
+
+    // And both ends read that accept the same way, which is the property the pair exists for.
+    let mirrored = Parameters::from_send_accept(&proposal, &accept).unwrap();
+    assert_eq!(agreed, mirrored);
+
+    // The transfer then runs exactly as a download does, because §11.22.6.1's ordering rules do
+    // not care which end proposed.
+    let mut sender = Sender::new(agreed);
+    let mut receiver = Receiver::new(mirrored);
+    for (len, eof) in [(8usize, false), (8, false), (4, true)] {
+        let counter = sender.block(len, eof).unwrap();
+        receiver.on_block(counter, len, eof).unwrap();
+        let (_, acked) = receiver.ack().unwrap();
+        sender.on_ack(acked, eof).unwrap();
+    }
+    assert!(receiver.is_complete(), "twenty octets in three blocks");
+}
+
+/// A responder that answers `SendAccept` with a block size nobody offered is refused.
+///
+/// §11.22.5: "The parameters in the SendAccept/ReceiveAccept message SHALL be used in the
+/// transfer. If those parameters are unacceptable to the Initiator, it SHALL abort."
+#[test]
+fn a_send_accept_that_widens_the_block_size_is_refused() {
+    let mut proposal = Init::new(b"image.ota", 8);
+    proposal.definite_length = Some(20);
+    proposal.control.sender_drive = true;
+    proposal.control.receiver_drive = false;
+
+    let limits = Limits {
+        available: Some(20),
+        ..Limits::default()
+    };
+    let agreed = negotiate(Direction::Upload, &proposal, &limits).unwrap();
+    let mut wider = agreed.send_accept(&[]);
+    wider.max_block_size = 16;
+    assert!(
+        Parameters::from_send_accept(&proposal, &wider).is_err(),
+        "a responder may narrow the block size and never widen it"
+    );
 }

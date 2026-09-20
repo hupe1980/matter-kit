@@ -21,6 +21,7 @@
 
 use core::cell::Cell;
 
+use matter_kit::DefaultConfig;
 use matter_kit::clusters::device_energy_management::{
     self as dem, DemHooks, DeviceEnergyManagement, ESAStateEnum, ESATypeEnum, OptOutStateEnum,
 };
@@ -37,7 +38,6 @@ use matter_kit::im::{
 use matter_kit::msg::{FabricIndex, SessionId};
 use matter_kit::platform::{Duration, Instant};
 use matter_kit::tlv::Value;
-use matter_kit::{Config, DefaultConfig};
 
 struct AllowAll;
 
@@ -94,11 +94,7 @@ fn at(seconds: u64) -> Instant {
 }
 
 /// The subscription table a controller-facing device keeps.
-type Table = SubscriptionTable<
-    DefaultConfig,
-    { DefaultConfig::SUBSCRIPTIONS },
-    { DefaultConfig::SUB_PATHS },
->;
+type Table = SubscriptionTable<DefaultConfig, 15, 3>;
 
 const FABRIC: FabricIndex = FabricIndex(1);
 

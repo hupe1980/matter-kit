@@ -7,6 +7,10 @@
 //! session goes. Each was written, documented, tested in isolation, and joined to nothing — so
 //! the rule it implements was not implemented at all, and every test passed.
 //!
+//! **An example is not a caller.** `examples/` is counted with the tests, deliberately: an
+//! example *is* the application, and a rule the application has to remember is a rule the
+//! library does not keep. That is the whole of R18 and of every defect below.
+//!
 //! The check is crude on purpose. It does not resolve paths, types or trait dispatch: it counts
 //! the name, anywhere, as a call. That direction of error is the safe one — a name that appears
 //! nowhere really is called by nothing — and it keeps the tool to one file with no dependencies.
@@ -34,7 +38,14 @@ struct Definition {
 pub struct Report {
     /// Called by nothing anywhere — neither the crate, nor tests, examples or fuzz targets.
     pub uncalled: Vec<String>,
-    /// Called only from test or example code.
+    /// Called from tests, examples, fuzz targets or `interop/` — but from nothing in `src/`.
+    ///
+    /// The bucket that matters most, and the one whose name used to hide it. An *example* is
+    /// not a caller: it is the application, and "the application remembers to do it" is exactly
+    /// the shape of every defect this sweep has found. `SubscriptionTable::remove_for_fabric` is
+    /// documented as "what `RemoveFabric` cascades into" and is called by `examples/light` —
+    /// which means a node built by anybody else drops a removed fabric's clusters and keeps its
+    /// subscriptions.
     pub tests_only: Vec<String>,
     /// How many public functions were examined.
     pub total: usize,
@@ -199,7 +210,10 @@ pub fn print(report: &Report) {
     for line in &report.uncalled {
         println!("  {line}");
     }
-    println!("\n{} called only from tests:", report.tests_only.len());
+    println!(
+        "\n{} called from tests or examples but from nothing in src/:",
+        report.tests_only.len()
+    );
     for line in &report.tests_only {
         println!("  {line}");
     }

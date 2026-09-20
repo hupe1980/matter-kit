@@ -31,7 +31,7 @@ use core::cell::RefCell;
 
 use matter_kit::acl::{Acl, AclAccess, AuthMode, Entry, SubjectDescriptor, Target};
 use matter_kit::clusters::access_control::{self, AccessControl, ChangeType};
-use matter_kit::config::{Config, DefaultConfig};
+use matter_kit::config::DefaultConfig;
 use matter_kit::dm::{
     AttributeDescriptor, ClusterDescriptor, CommandDescriptor, DeviceType, Endpoint, Node,
     Privilege, Resolved,
@@ -43,9 +43,9 @@ use matter_kit::im::{
 use matter_kit::msg::{CaseAuthenticatedTag, FabricIndex, NodeId};
 use matter_kit::tlv::{ContainerKind, Tag, TlvWriter};
 
-const ENTRIES: usize = DefaultConfig::ACL_ENTRIES;
-const SUBJECTS: usize = DefaultConfig::ACL_SUBJECTS;
-const TARGETS: usize = DefaultConfig::ACL_TARGETS;
+const ENTRIES: usize = 20;
+const SUBJECTS: usize = 4;
+const TARGETS: usize = 3;
 
 type TestAcl = Acl<DefaultConfig, ENTRIES, SUBJECTS, TARGETS>;
 type TestEntry = Entry<SUBJECTS, TARGETS>;

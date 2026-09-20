@@ -230,6 +230,10 @@ impl<'a> StatusReport<'a> {
     }
 
     /// Reads a message from `buf`.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Appendix D's ProtocolCode is the low 16 bits of the qualified value just decoded"
+    )]
     pub fn decode(buf: &'a [u8]) -> Result<Self> {
         let (Some(general), Some(protocol), Some(code), Some(data)) =
             (buf.get(..2), buf.get(2..6), buf.get(6..8), buf.get(8..))

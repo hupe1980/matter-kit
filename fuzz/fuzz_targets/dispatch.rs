@@ -37,6 +37,7 @@ use matter_kit::im::{
 };
 use matter_kit::msg::{ExchangeId, SessionId};
 use matter_kit::platform::{Duration, Instant};
+use matter_kit::tlv::TlvReader;
 use matter_kit::tlv::{Tag, TlvWriter};
 
 const ATTRS: &[AttributeDescriptor] = &[
@@ -174,6 +175,16 @@ fuzz_target!(|data: &[u8]| {
                     "a reply claimed {len} octets of a {}-octet buffer",
                     buf.len()
                 );
+                // D77, over everything the fuzzer can reach rather than over the messages
+                // somebody thought to list. An optional structure encoded with nothing in it is
+                // legal Appendix A and refused by every released CHIP SDK — which is how an
+                // empty `session-parameter-struct` made this crate uncommissionable while every
+                // test passed. `tests/encoder_acceptance.rs` pins the hand-listed encoders; this
+                // pins the server's response path, where a reply is built from arbitrary input
+                // and only ever appears on a wire.
+                if let Ok(Some(tag)) = TlvReader::first_empty_optional(&buf[..len]) {
+                    panic!("a reply carried an empty optional structure under {tag:?}");
+                }
             }
             Ok(Served::Subscribe(_) | Served::Silent | Served::Unhandled { .. }) | Err(_) => {}
         }

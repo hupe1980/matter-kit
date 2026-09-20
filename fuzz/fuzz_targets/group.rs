@@ -20,6 +20,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use matter_kit::DefaultConfig;
 use matter_kit::crypto::SymmetricKey;
 use matter_kit::fabric::CompressedFabricId;
 use matter_kit::group::keys::{GroupKeySecurityPolicy, GroupKeySet, GroupKeys};
@@ -32,13 +33,13 @@ const F1: FabricIndex = FabricIndex(1);
 const COMPRESSED: CompressedFabricId = CompressedFabricId(0x87E1_B004_E235_A130);
 const FROM: PeerAddr = PeerAddr::new([0xFD; 16]);
 
-type Keys = GroupKeys<4, 8>;
+type Keys = GroupKeys<DefaultConfig>;
 /// Deliberately small: a full table is the interesting state, because §4.16.1 forbids evicting
 /// from it.
 type Peers = PeerTable<2, 1>;
 
 fn table(epoch: [u8; 16], policy: GroupKeySecurityPolicy) -> Keys {
-    let mut keys = Keys::new(4, 3);
+    let mut keys = Keys::new();
     let _ = keys.write_key_set(GroupKeySet::single(
         F1,
         7,

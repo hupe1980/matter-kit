@@ -194,3 +194,52 @@ fn the_qr_and_manual_forms_agree_about_the_passcode() {
         assert_eq!(from_manual.discriminator >> 8, 0x0ABC >> 8);
     }
 }
+
+/// §5.1.4.1.4's Tables 63 and 64 give every digit group of a manual pairing code a range, and a
+/// group outside it is not a code this encoding can produce.
+///
+/// Reading one anyway is worse than refusing it. A five-digit group holds up to 99999 where the
+/// field is sixteen bits, and the surplus falls off a mask or an `as` — so the code decodes,
+/// silently, to a *different* device's discriminator, passcode or vendor. Both strings below
+/// carry a correct Verhoeff check digit, so nothing else in the parser has a reason to object.
+#[test]
+fn a_digit_group_wider_than_its_field_is_refused() {
+    // DIGIT[2..6] is "a 5-digit decimal number from 00000 to 65535 (0xFFFF/16 bits)"; this is
+    // 99999, whose bit 16 falls off both `& 0xC000` and `& 0x3FFF`.
+    assert!(
+        OnboardingPayload::from_manual_code("09999900013").is_err(),
+        "a 16-bit group holding 99999 must be refused, not masked"
+    );
+
+    // DIGIT[11..15] and DIGIT[16..20] are the Vendor and Product IDs, "00000 to 65535"; 99999
+    // truncates to 0x869F, which is a different vendor entirely.
+    assert!(
+        OnboardingPayload::from_manual_code("401234000199999999992").is_err(),
+        "a vendor or product id holding 99999 must be refused, not truncated"
+    );
+}
+
+/// The check above must not have been bought by refusing codes that are legal.
+///
+/// Every group at its maximum, encoded by this crate and read back: 0xFFFF for the sixteen-bit
+/// group is a discriminator of 0xF00 with passcode bits 0x3FFF, and the thirteen-bit group's
+/// 0x1FFF would exceed §5.1.1.6's passcode range, so the passcode here is the largest that does
+/// not.
+#[test]
+fn a_group_at_the_top_of_its_range_still_parses() {
+    let payload = OnboardingPayload::new(
+        VendorId(0xFFFF),
+        0xFFFF,
+        0x0F00,
+        Passcode::new(Passcode::MAX).unwrap(),
+        DiscoveryCapabilities::ON_IP_NETWORK,
+        CustomFlow::UserIntent,
+    )
+    .unwrap();
+    let code = payload.to_manual_code(true).unwrap();
+    let parsed = OnboardingPayload::from_manual_code(&code).unwrap();
+    assert_eq!(parsed.vendor_id, VendorId(0xFFFF));
+    assert_eq!(parsed.product_id, 0xFFFF);
+    assert_eq!(parsed.passcode.value(), Passcode::MAX);
+    assert_eq!(parsed.discriminator >> 8, 0x0F00 >> 8);
+}

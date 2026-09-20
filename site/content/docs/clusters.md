@@ -133,10 +133,12 @@ data, so the linker drops every one your device does not name — but resolving 
 reaches `generated::find`, which names all of them, and a device that serves three clusters
 would then carry the whole library.
 
-## Behaviour still has to be written
+## Behaviour is written by hand
 
-The tables say what a cluster *is*. A few clusters also define what one *does*, and those are
-written by hand over the generated types — On/Off is the first:
+The tables say what a cluster *is*. Some clusters also define what one *does*, and that half is
+written by hand over the generated types — <!-- stats:cluster-behaviours -->36<!-- /stats -->
+clusters have it, and the ones that drive something a product owns take a hooks trait you
+implement, from On/Off and Level Control to Energy EVSE. On/Off is the smallest:
 
 ```rust,ignore
 use matter_kit::clusters::on_off::{OnOff, OnOffHooks};

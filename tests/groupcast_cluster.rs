@@ -20,10 +20,14 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use core::cell::RefCell;
+use matter_kit::Config;
 
 use matter_kit::clusters::groupcast::{
     self as gc, FEATURE_LISTENER, FEATURE_PER_GROUP_ADDRESS, FEATURE_SENDER, Groupcast,
@@ -46,8 +50,21 @@ const LIGHTS: GroupId = GroupId(1);
 const KEY: [u8; 16] = [0x77; 16];
 const COMPRESSED: CompressedFabricId = CompressedFabricId(0x87E1_B004_E235_A130);
 
-type Keys = GroupKeys<8, 16>;
-type Cluster<'a> = Groupcast<'a, 8, 4, 8, 16>;
+/// A node that offers each fabric eight group memberships rather than §2.11.1.2's minimum of
+/// four, so that the limit these tests are about — §11.27.6.1's "half of `MaxMembershipCount`"
+/// — is the one they actually reach.
+///
+/// The quota is `Config`'s rather than a constructor argument, so it cannot be set below
+/// §2.11.1.2's minimum: `AssertValid` checks the policy and `GroupKeys::CHECK` the table.
+struct EightGroups;
+impl Config for EightGroups {
+    const GROUPS_PER_FABRIC: usize = 8;
+    /// One key set per group these tests join, since each `JoinGroup` here carries its own.
+    const GROUP_KEYS_PER_FABRIC: usize = 4;
+}
+
+type Keys = GroupKeys<EightGroups, 20, 40>;
+type Cluster<'a> = Groupcast<'a, EightGroups, 8, 4, 20, 40>;
 
 struct Fixture {
     node: Node<'static>,
@@ -66,7 +83,7 @@ fn fixture(feature_map: u32) -> Fixture {
     let endpoints: &'static [Endpoint<'static>] = Box::leak(Box::new([Endpoint::new(0, clusters)]));
     Fixture {
         node: Node::new(endpoints),
-        keys: RefCell::new(Keys::new(8, 4)),
+        keys: RefCell::new(Keys::new()),
         feature_map,
     }
 }
@@ -499,7 +516,7 @@ fn one_fabric_may_use_half_the_table() {
 
 #[test]
 fn a_per_group_address_needs_the_feature() {
-    // §11.27.4.3: `PGA` is what says the node can subscribe to §2.5.6.2's per-group addresses.
+    // §11.27.4 bit 2: `PGA` says the node can subscribe to §2.5.6.2's per-group addresses.
     // A node that accepted the policy without the radio for it would join a group and hear
     // nothing.
     let plain = fixture(FEATURE_LISTENER);

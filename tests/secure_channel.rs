@@ -40,7 +40,7 @@ const PASSCODE: u32 = 20_202_021;
 const SALT: &[u8] = b"a per-device salt";
 const ITERATIONS: u32 = 1_000;
 
-type Stack = Messaging<DefaultConfig, { DefaultConfig::SESSIONS }, 8>;
+type Stack = Messaging<DefaultConfig>;
 
 struct Node {
     channel: Channel,

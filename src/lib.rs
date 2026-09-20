@@ -25,24 +25,26 @@
 //!
 //! # Three things that shape the whole crate
 //!
-//! **Sizing is a type, not a build flag.** Every table in the stack — fabrics, sessions,
-//! exchanges, subscriptions, access-control entries — is a fixed-capacity array whose
-//! length comes from an associated constant on [`Config`]. The specification's minima
-//! (Core §2.11) are `const` assertions, so a configuration that could not pass
-//! certification does not compile. Two libraries in one binary cannot fight over it the
-//! way they fight over a Cargo feature.
+//! **A capacity is declared once, and the specification checks it.** Every table in the stack
+//! — fabrics, sessions, exchanges, subscriptions, access-control entries — is a fixed-capacity
+//! array whose length is its own const parameter, and each one carries a `const` assertion that
+//! the length can keep the promises [`Config`] makes to each fabric. A node that could not pass
+//! certification does not compile, and the failing rule is named in the build error. Two
+//! libraries in one binary cannot fight over it the way they fight over a Cargo feature.
+//!
+//! ```compile_fail
+//! use matter_kit::{Config, DefaultConfig, acl::Acl};
+//!
+//! // Core §2.11.1.1 wants four access-control entries for each of five fabrics.
+//! let too_small: Acl<DefaultConfig, 4, 4, 3> = Acl::new();
+//! ```
 //!
 //! ```
-//! use matter_kit::{Config, DefaultConfig};
+//! use matter_kit::{Capacity, Config, DefaultConfig, acl::Acl};
 //!
-//! struct Small;
-//! impl Config for Small {
-//!     const FABRICS: usize = 5;          // Core §11.18.5.3 constrains this to 5..=254
-//!     const SESSIONS: usize = 16;
-//!     // …everything else defaults.
-//! }
-//! assert!(Small::ACL_ENTRIES >= 4 * Small::FABRICS); // Core §2.11.1.1
-//! # let _ = DefaultConfig::FABRICS;
+//! // The defaults are the specification's own minima, so naming none of them is conformant.
+//! let acl: Acl<DefaultConfig> = Acl::new();
+//! assert_eq!(<Acl<DefaultConfig> as Capacity>::PER_FABRIC, DefaultConfig::ACL_ENTRIES_PER_FABRIC);
 //! ```
 //!
 //! **No runtime is chosen for you.** The crate is `async` over [`core::future`] and talks
@@ -135,6 +137,9 @@
         clippy::panic,
         clippy::indexing_slicing,
         clippy::arithmetic_side_effects,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
     )
 )]
 
@@ -187,7 +192,7 @@ pub mod sync;
 pub mod tlv;
 pub mod transport;
 
-pub use config::{Config, DefaultConfig};
+pub use config::{Capacity, Config, DefaultConfig, SubscriptionCapacity};
 pub use error::{Error, ErrorCode, Result};
 
 /// The Matter specification version this crate implements, in the encoding of the Basic

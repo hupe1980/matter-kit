@@ -285,6 +285,10 @@ impl Channel {
     }
 
     /// §5.5's gate, then §4.14.1's first message.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "§4.13.2.4 wants an unpredictable 16-bit local session id; any 16 bits of the draw serve"
+    )]
     fn pbkdf_param_request<C, const N: usize, K, R>(
         &mut self,
         body: &[u8],
@@ -440,6 +444,10 @@ impl Channel {
     }
 
     /// §4.14.2.3's Sigma1, answered against the fabric its destination identifier names.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "§4.13.2.4 wants an unpredictable 16-bit local session id; any 16 bits of the draw serve"
+    )]
     fn sigma1<C, const N: usize, K, R>(
         &mut self,
         body: &[u8],

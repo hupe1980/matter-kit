@@ -348,6 +348,10 @@ impl Tag {
     /// Reads a tag of the form named by `control_bits` from the front of `buf`.
     ///
     /// Returns the tag and how many octets it consumed.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "Appendix A's fully-qualified tag takes vendor and profile from two-octet fields"
+    )]
     pub(crate) fn decode(control_bits: u8, buf: &[u8]) -> Result<(Self, usize)> {
         let control = TagControl::from_bits(control_bits);
         let n = control.octets();
@@ -456,6 +460,10 @@ fn read_le_u32(src: &[u8]) -> Result<u32> {
 }
 
 /// Sign-extends the `n`-octet little-endian two's-complement integer in `src`.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "a two's-complement reinterpretation, which is what Appendix A's signed integers are"
+)]
 pub(crate) fn read_le_i64(src: &[u8]) -> Result<i64> {
     let raw = read_le_u64(src)?;
     let bits = u32::try_from(src.len())

@@ -26,11 +26,7 @@ use matter_kit::msg::{FabricIndex, SessionId};
 use matter_kit::platform::{Duration, Instant};
 use matter_kit::{Config, DefaultConfig};
 
-type Table = SubscriptionTable<
-    DefaultConfig,
-    { DefaultConfig::SUBSCRIPTIONS },
-    { DefaultConfig::SUB_PATHS },
->;
+type Table = SubscriptionTable<DefaultConfig>;
 
 fn at(seconds: u64) -> Instant {
     Instant::ZERO.saturating_add(Duration::from_secs(seconds))
@@ -65,7 +61,7 @@ fuzz_target!(|data: &[u8]| {
         if let Ok(Some(iter)) = request.attribute_paths() {
             for path in iter {
                 let Ok(path) = path else { break };
-                if paths.len() >= DefaultConfig::SUB_PATHS {
+                if paths.len() >= 3 {
                     break;
                 }
                 paths.push(path);

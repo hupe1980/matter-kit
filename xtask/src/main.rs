@@ -55,10 +55,12 @@
 
 mod api;
 mod cite;
+mod coverage;
 mod emit;
 mod ident;
 mod model;
 mod parse;
+mod stats;
 mod types;
 
 use std::path::{Path, PathBuf};
@@ -76,6 +78,10 @@ enum Command {
     Api { strict: bool },
     /// Check every `§` citation and quotation against the specification PDFs.
     Cite { spec: PathBuf, strict: bool },
+    /// Measure the repository, and refresh or check the numbers the documents state about it.
+    Stats { write: bool, check: bool },
+    /// Index every specification section this crate names, and which module names it.
+    Coverage { write: bool, check: bool },
 }
 
 fn main() -> ExitCode {
@@ -120,9 +126,19 @@ fn parse_args() -> Result<Command, String> {
     let mut out = PathBuf::from("src/clusters/generated");
     let mut spec = PathBuf::from("concepts/references/1.6");
     let mut strict = false;
+    let mut write = false;
+    let mut check = false;
     while let Some(flag) = args.next() {
         if flag == "--strict" {
             strict = true;
+            continue;
+        }
+        if flag == "--write" {
+            write = true;
+            continue;
+        }
+        if flag == "--check" {
+            check = true;
             continue;
         }
         let value = args.next().ok_or(format!("{flag} needs a value"))?;
@@ -139,6 +155,8 @@ fn parse_args() -> Result<Command, String> {
         "report" => Ok(Command::Report { dm }),
         "api" => Ok(Command::Api { strict }),
         "cite" => Ok(Command::Cite { spec, strict }),
+        "stats" => Ok(Command::Stats { write, check }),
+        "coverage" => Ok(Command::Coverage { write, check }),
         other => Err(format!("unknown subcommand {other}")),
     }
 }
@@ -186,6 +204,7 @@ fn run(command: Command) -> Result<(), String> {
         }
         Command::Cite { spec, strict } => {
             let report = cite::sweep(Path::new("."), &spec, Path::new("target/xtask-cite"))?;
+            cite::write_counts(Path::new("."), &report);
             cite::print(&report);
             let found = report.sections.len() + report.quotations.len();
             if strict && found > 0 {
@@ -201,6 +220,64 @@ fn run(command: Command) -> Result<(), String> {
                     "{} public functions are called by nothing",
                     report.uncalled.len()
                 ));
+            }
+            Ok(())
+        }
+        Command::Coverage { write, check } => {
+            let root = Path::new(".");
+            let index = coverage::sweep(root)?;
+            let document = coverage::render(&index);
+            let path = root.join("site/content/docs/coverage.md");
+            println!(
+                "xtask: {} specification sections named across {} modules",
+                index.len(),
+                index
+                    .values()
+                    .flatten()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+            );
+            if check {
+                let current = std::fs::read_to_string(&path).unwrap_or_default();
+                if current != document {
+                    return Err(format!(
+                        "{} is not what `cargo xtask coverage --write` produces",
+                        path.display()
+                    ));
+                }
+                return Ok(());
+            }
+            if write {
+                std::fs::write(&path, document).map_err(|e| format!("{}: {e}", path.display()))?;
+                println!("  wrote {}", path.display());
+            } else {
+                print!("{document}");
+            }
+            Ok(())
+        }
+        Command::Stats { write, check } => {
+            let root = Path::new(".");
+            let measured = stats::collect(root)?;
+            print!("{}", stats::render(&measured));
+            if !write && !check {
+                return Ok(());
+            }
+            let documents = stats::documents(root);
+            let stale = stats::apply(&documents, &measured, check)?;
+            if check && !stale.is_empty() {
+                for file in &stale {
+                    eprintln!("  stale: {}", file.display());
+                }
+                return Err(format!(
+                    "{} document(s) state a number this repository does not — \
+                     run `cargo xtask stats --write`",
+                    stale.len()
+                ));
+            }
+            if write {
+                for file in &stale {
+                    println!("  wrote {}", file.display());
+                }
             }
             Ok(())
         }

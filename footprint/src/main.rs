@@ -81,10 +81,16 @@ struct Buffers {
 struct Light;
 
 impl Config for Light {
+    // Everything defaults to the specification's own minimum, which is what a light wants: the
+    // tables below are then checked against that policy at compile time.
     const FABRICS: usize = 5;
-    const SESSIONS: usize = 16;
-    const SUBSCRIPTIONS: usize = 15;
 }
+
+/// The session table, named so that `CapabilityMinima` can be derived from it rather than from
+/// a number typed beside it — §11.1.4.4 asks for "the **actual**" figure.
+type Sessions = matter_kit::session::SessionTable<Light, 16>;
+/// §8.5's subscriptions: three per fabric and three paths each, the specification's minimum.
+type Subs = SubscriptionTable<Light>;
 
 const PRODUCT: Product<'static> = Product::new(
     "Example Vendor",
@@ -93,7 +99,7 @@ const PRODUCT: Product<'static> = Product::new(
     0x8000,
     "matter-kit-light-0001",
 )
-.with_capability_minima(CapabilityMinima::from_config::<Light>());
+.with_capability_minima(CapabilityMinima::from_tables::<Light, Sessions, Subs>());
 
 /// Randomness is injected everywhere in this crate, and on a part it comes from the radio's
 /// entropy source. A counter is the wrong answer for a product and the right one here: what is
@@ -213,21 +219,21 @@ fn main() -> ! {
     // makes the Scene Table shared between them — so it is a value both borrow.
     static SCENE_TABLE: StaticCell<SceneTable<8, 32, { Light::FABRICS }>> = StaticCell::new();
     static GROUP_KEYS: StaticCell<
-        RefCell<matter_kit::group::GroupKeys<{ Light::GROUP_KEYS }, { Light::GROUPS }>>,
+        RefCell<matter_kit::group::GroupKeys<Light>>,
     > = StaticCell::new();
     let scene_table = SCENE_TABLE.init(SceneTable::new(true));
     let groups_server = Groups::<8, _, _>::with(4, true, &identify_server, scene_table);
     let scenes_server = Scenes::new(scene_table, &groups_server, &lamp, true);
-    let group_keys = GROUP_KEYS.init(RefCell::new(matter_kit::group::GroupKeys::new(4, 3)));
+    let group_keys = GROUP_KEYS.init(RefCell::new(matter_kit::group::GroupKeys::new()));
     let group_key_server = GroupKeyManagement::new(group_keys, &());
     // --- The node's tables, where firmware keeps them ---------------------------------------
     //
     // Every one is a fixed-capacity array sized from `Light`, and together they are what the
     // stack costs in RAM. The buffers below them are the other half: a datagram, the payload a
     // reply is built in, and the scratch one attribute value is written to.
-    static STACK: StaticCell<Messaging<Light, { Light::SESSIONS }, 24>> = StaticCell::new();
+    static STACK: StaticCell<Messaging<Light, 16, 24>> = StaticCell::new();
     static SUBSCRIPTIONS: StaticCell<
-        SubscriptionTable<Light, { Light::SUBSCRIPTIONS }, { Light::SUB_PATHS }>,
+        Subs,
     > = StaticCell::new();
     static BUFFERS: StaticCell<Buffers> = StaticCell::new();
 
@@ -238,7 +244,7 @@ fn main() -> ! {
     // reason a device does it: the cluster edits it while the server reads it.
     static ACL_CELL: StaticCell<
         RefCell<
-            Acl<Light, { Light::ACL_ENTRIES }, { Light::ACL_SUBJECTS }, { Light::ACL_TARGETS }>,
+            Acl<Light>,
         >,
     > = StaticCell::new();
     let acl_cell = ACL_CELL.init(RefCell::new(Acl::new()));

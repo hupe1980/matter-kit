@@ -179,7 +179,7 @@ pub const EXCHANGE_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// [`Config`] says the node was built for. A full table is
 /// [`ErrorCode::NoSpace`] — a value the caller answers `BUSY` with, never an abort.
 #[derive(Debug)]
-pub struct ExchangeTable<C: Config, const N: usize> {
+pub struct ExchangeTable<C: Config, const N: usize = 64> {
     open: Vec<Exchange, N>,
     /// The next exchange id to hand out. §4.4.3.3 only requires that an id not collide
     /// with a live exchange on the same session; a counter is the simplest thing that
@@ -192,6 +192,14 @@ impl<C: Config, const N: usize> Default for ExchangeTable<C, N> {
     fn default() -> Self {
         Self::new(0)
     }
+}
+
+impl<C: Config, const N: usize> crate::config::Capacity for ExchangeTable<C, N> {
+    const TOTAL: usize = N;
+    /// The specification sets no per-fabric exchange guarantee, so the whole table is the
+    /// answer: an exchange is opened and closed inside one interaction, and §4.10.5.3's
+    /// reclamation is what keeps a stranger from holding them.
+    const PER_FABRIC: usize = N;
 }
 
 impl<C: Config, const N: usize> ExchangeTable<C, N> {

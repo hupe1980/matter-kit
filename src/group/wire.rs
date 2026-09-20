@@ -169,10 +169,17 @@ pub enum Received<'a> {
 /// id "SHALL NOT be used as the sole means to locate the associated Operational Group Key, since
 /// it MAY collide within the fabric". A failed candidate leaves `buf` unusable for the next one,
 /// so each attempt works on a copy of the ciphertext in `scratch`.
-pub fn receive<'b, const K: usize, const M: usize, const D: usize, const C: usize>(
+pub fn receive<
+    'b,
+    Cfg: crate::config::Config,
+    const K: usize,
+    const M: usize,
+    const D: usize,
+    const C: usize,
+>(
     buf: &'b mut [u8],
     from: PeerAddr,
-    keys: &GroupKeys<K, M>,
+    keys: &GroupKeys<Cfg, K, M>,
     peers: &mut PeerTable<D, C>,
     compressed: impl Fn(FabricIndex) -> Option<crate::fabric::CompressedFabricId>,
     scratch: &mut [u8],

@@ -33,6 +33,7 @@
 use core::cell::RefCell;
 
 use crate::clusters::generated::group_key_management as spec_gkm;
+use crate::config::Config;
 use crate::crypto::{SYMMETRIC_KEY_LENGTH_BYTES, SymmetricKey};
 use crate::dm::spec::{Conforming, Optional};
 use crate::dm::{Resolved, ResolvedCommand};
@@ -83,15 +84,23 @@ impl GroupTable for () {
 /// `K` and `M` size [`GroupKeys`]; `T` is whatever can answer "which endpoints are in this
 /// group", which is the Groups cluster on a device that has one.
 #[derive(Debug)]
-pub struct GroupKeyManagement<'a, T: GroupTable, const K: usize, const M: usize> {
-    keys: &'a RefCell<GroupKeys<K, M>>,
+pub struct GroupKeyManagement<
+    'a,
+    C: Config,
+    T: GroupTable,
+    const K: usize = 15,
+    const M: usize = 20,
+> {
+    keys: &'a RefCell<GroupKeys<C, K, M>>,
     table: &'a T,
 }
 
-impl<'a, T: GroupTable, const K: usize, const M: usize> GroupKeyManagement<'a, T, K, M> {
+impl<'a, C: Config, T: GroupTable, const K: usize, const M: usize>
+    GroupKeyManagement<'a, C, T, K, M>
+{
     /// A cluster over the node's group keys and its group membership.
     #[must_use]
-    pub const fn new(keys: &'a RefCell<GroupKeys<K, M>>, table: &'a T) -> Self {
+    pub const fn new(keys: &'a RefCell<GroupKeys<C, K, M>>, table: &'a T) -> Self {
         Self { keys, table }
     }
 
@@ -105,7 +114,7 @@ impl<'a, T: GroupTable, const K: usize, const M: usize> GroupKeyManagement<'a, T
 
     /// The key table this cluster manages, for the message layer to send and receive with.
     #[must_use]
-    pub const fn keys(&self) -> &'a RefCell<GroupKeys<K, M>> {
+    pub const fn keys(&self) -> &'a RefCell<GroupKeys<C, K, M>> {
         self.keys
     }
 }
@@ -199,8 +208,8 @@ fn to_key_set(
     })
 }
 
-impl<T: GroupTable, const K: usize, const M: usize> ClusterHandler
-    for GroupKeyManagement<'_, T, K, M>
+impl<C: Config, T: GroupTable, const K: usize, const M: usize> ClusterHandler
+    for GroupKeyManagement<'_, C, T, K, M>
 {
     /// §11.2.7.4: a fabric's group keys go with the fabric. Leaving them behind leaves key
     /// material for a fabric this node is no longer on — the IPK included.
@@ -350,7 +359,7 @@ impl<T: GroupTable, const K: usize, const M: usize> ClusterHandler
     }
 }
 
-impl<T: GroupTable, const K: usize, const M: usize> GroupKeyManagement<'_, T, K, M> {
+impl<C: Config, T: GroupTable, const K: usize, const M: usize> GroupKeyManagement<'_, C, T, K, M> {
     /// §11.2.7.3's response: everything about the key set except the keys.
     fn read_response(set: &GroupKeySet) -> spec_gkm::KeySetReadResponseFields<'static> {
         let start = |index: usize| {
@@ -440,6 +449,8 @@ fn visible(ctx: &InteractionContext<'_>, index: FabricIndex) -> bool {
 }
 
 /// So a tuple of clusters can dispatch to it by id.
-impl<T: GroupTable, const K: usize, const M: usize> Cluster for GroupKeyManagement<'_, T, K, M> {
+impl<C: Config, T: GroupTable, const K: usize, const M: usize> Cluster
+    for GroupKeyManagement<'_, C, T, K, M>
+{
     const ID: ClusterId = ID;
 }

@@ -554,7 +554,7 @@ impl Fabric {
 
 /// The fixed-capacity set of fabrics a node belongs to (§11.18).
 #[derive(Debug)]
-pub struct FabricTable<C: Config, const N: usize> {
+pub struct FabricTable<C: Config, const N: usize = 5> {
     fabrics: Vec<Fabric, N>,
     /// The last index handed out, so the next one is monotonically greater (§11.18.6.8).
     last_index: u8,
@@ -567,11 +567,35 @@ impl<C: Config, const N: usize> Default for FabricTable<C, N> {
     }
 }
 
+impl<C: Config, const N: usize> crate::config::Capacity for FabricTable<C, N> {
+    const TOTAL: usize = N;
+    /// A fabric table has no per-fabric share: one slot *is* one fabric.
+    const PER_FABRIC: usize = 1;
+}
+
 impl<C: Config, const N: usize> FabricTable<C, N> {
+    /// Compile-time proof that this table can hold the fabrics the node advertises.
+    ///
+    /// `SupportedFabrics` (§11.18.5.3) is answered from this table's real capacity, so a table
+    /// smaller than [`Config::FABRICS`] would quietly make the node
+    /// support fewer ecosystems than every other number it derives from that constant assumes.
+    pub const CHECK: () = {
+        let () = AssertValid::<C>::CHECK;
+        assert!(
+            N >= C::FABRICS,
+            "FabricTable: the table must hold Config::FABRICS fabrics — \
+             raise the table's N, or lower Config::FABRICS"
+        );
+        assert!(
+            N <= 254,
+            "FabricTable: Core §11.18.5.3 constrains SupportedFabrics to 5..=254"
+        );
+    };
+
     /// An empty table — what a factory-fresh node has.
     #[must_use]
     pub fn new() -> Self {
-        let () = AssertValid::<C>::CHECK;
+        let () = Self::CHECK;
         Self {
             fabrics: Vec::new(),
             last_index: 0,

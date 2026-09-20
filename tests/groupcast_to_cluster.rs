@@ -25,6 +25,7 @@
 
 use core::cell::Cell;
 
+use matter_kit::DefaultConfig;
 use matter_kit::acl::{Acl, AclAccess, AuthMode, Entry, SubjectDescriptor};
 use matter_kit::clusters::on_off::{self, OnOff, OnOffHooks};
 use matter_kit::crypto::SymmetricKey;
@@ -39,7 +40,6 @@ use matter_kit::im::{Server, opcode};
 use matter_kit::msg::{ExchangeId, FabricIndex, GroupId, NodeId, ProtocolHeader, ProtocolId};
 use matter_kit::platform::PeerAddr;
 use matter_kit::tlv::{Tag, TlvWriter};
-use matter_kit::{Config, DefaultConfig};
 
 const F1: FabricIndex = FabricIndex(1);
 const COMPRESSED: CompressedFabricId = CompressedFabricId(0x87E1_B004_E235_A130);
@@ -62,8 +62,8 @@ impl OnOffHooks for Lamp {
 }
 
 /// The key table a commissioner would have written with `KeySetWrite` and `GroupKeyMapWrite`.
-fn keys() -> GroupKeys<4, 8> {
-    let mut keys = GroupKeys::new(4, 3);
+fn keys() -> GroupKeys<DefaultConfig> {
+    let mut keys = GroupKeys::new();
     let mut epoch_keys = heapless::Vec::new();
     epoch_keys
         .push(EpochKey {
@@ -169,7 +169,7 @@ fn a_multicast_invoke_reaches_the_cluster_and_is_answered_with_silence() {
     let endpoints = [Endpoint::new(1, &clusters)];
     let node = Node::new(&endpoints);
 
-    let acl_cell: core::cell::RefCell<Acl<DefaultConfig, { DefaultConfig::ACL_ENTRIES }, 4, 3>> =
+    let acl_cell: core::cell::RefCell<Acl<DefaultConfig, 20, 4, 3>> =
         core::cell::RefCell::new(Acl::new());
     // §9.10.5.7: a Group entry may never carry Administer — a shared key administering a node
     // would be an administrator with no attribution.
@@ -272,7 +272,7 @@ fn a_group_with_no_grant_changes_nothing_and_still_says_nothing() {
     let node = Node::new(&endpoints);
 
     // An empty list: the group is a member of nothing it may operate.
-    let acl_cell: core::cell::RefCell<Acl<DefaultConfig, { DefaultConfig::ACL_ENTRIES }, 4, 3>> =
+    let acl_cell: core::cell::RefCell<Acl<DefaultConfig, 20, 4, 3>> =
         core::cell::RefCell::new(Acl::new());
     let subject = SubjectDescriptor::group(message.context.fabric_index, message.context.group);
     let access = AclAccess::new(&acl_cell, node, &subject);

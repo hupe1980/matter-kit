@@ -542,11 +542,17 @@ impl<C: Config, const N: usize, const S: usize, const T: usize> ClusterHandler
         let full = |r: crate::error::Result<()>| r.map_err(|_| Status::ResourceExhausted);
         match resolved.attribute {
             ACL => self.read_acl(ctx, w, tag),
-            // §9.10.6.5–7: these report the *minimum* the server supports, which is exactly
-            // what `Config` sized the tables to.
+            // §9.10.6.5–7 report the *minimum* the server supports, and every one of the three
+            // comes from the list that will have to honour it: `S` and `T` are the entry's own
+            // widths, and `PER_FABRIC` is the quota `Acl::insert` enforces. `Acl::CHECK` is what
+            // makes the third of those a promise the list can keep — without it this attribute
+            // is a number typed next to a table of a different size.
             SUBJECTS_PER_ENTRY => full(w.unsigned(tag, S as u64)),
             TARGETS_PER_ENTRY => full(w.unsigned(tag, T as u64)),
-            ENTRIES_PER_FABRIC => full(w.unsigned(tag, C::ACL_ENTRIES_PER_FABRIC as u64)),
+            ENTRIES_PER_FABRIC => full(w.unsigned(
+                tag,
+                <Acl<C, N, S, T> as crate::config::Capacity>::PER_FABRIC as u64,
+            )),
             _ => Err(Status::UnsupportedAttribute),
         }
     }
@@ -678,12 +684,7 @@ mod tests {
     use super::*;
     use crate::config::DefaultConfig;
 
-    type TestAcl = Acl<
-        DefaultConfig,
-        { DefaultConfig::ACL_ENTRIES },
-        { DefaultConfig::ACL_SUBJECTS },
-        { DefaultConfig::ACL_TARGETS },
-    >;
+    type TestAcl = Acl<DefaultConfig>;
 
     #[test]
     fn the_wire_values_are_section_9_10_5_2s_and_not_the_enums_order() {
@@ -714,21 +715,19 @@ mod tests {
     }
 
     #[test]
-    fn the_minima_are_reported_from_the_config() {
+    fn the_minima_are_reported_from_the_list_that_holds_them() {
+        // §9.10.6.5, §9.10.6.6 and §9.10.6.7 are constrained to `4..`, `3..` and `4..`, and all
+        // three are answered from the list rather than from a constant beside it —
+        // `Acl::CHECK` is what refuses a list too narrow or too short to mean them.
         let acl = RefCell::new(TestAcl::new());
-        let cluster_impl = AccessControl::<
-            _,
-            { DefaultConfig::ACL_ENTRIES },
-            { DefaultConfig::ACL_SUBJECTS },
-            { DefaultConfig::ACL_TARGETS },
-        >::new(&acl);
+        let cluster_impl = AccessControl::<_, 20, 4, 3>::new(&acl);
         assert_eq!(cluster_impl.acl().borrow().len(), 0);
-        // §9.10.6.5 requires at least 4, §9.10.6.6 at least 3, §9.10.6.7 at least 4. These
-        // are constraints on a `Config`, so they are checked when it is compiled.
+        assert_eq!(<TestAcl as crate::config::Capacity>::PER_FABRIC, 4);
         const {
-            assert!(DefaultConfig::ACL_SUBJECTS >= 4);
-            assert!(DefaultConfig::ACL_TARGETS >= 3);
-            assert!(DefaultConfig::ACL_ENTRIES_PER_FABRIC >= 4);
+            assert!(
+                <TestAcl as crate::config::Capacity>::TOTAL
+                    >= <TestAcl as crate::config::Capacity>::PER_FABRIC * DefaultConfig::FABRICS
+            );
         }
     }
 }

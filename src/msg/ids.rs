@@ -63,8 +63,31 @@ impl NodeId {
         matches!(self.kind(), NodeIdKind::Operational)
     }
 
+    /// An Ephemeral Initiator Node ID for an Unsecured Session Context (§4.13.2.1).
+    ///
+    /// > Initiators SHALL select a new random ephemeral node ID for each unsecured session, and
+    /// > SHALL select an ID that does not conflict with any ephemeral node IDs for any other
+    /// > ongoing unsecured sessions opened by the initiator.
+    ///
+    /// The value is drawn from the caller's [`Rng`](crate::platform::Rng) and folded into the
+    /// Operational Node ID range, which is where §4.13.2.1 says it has to come from. Folding
+    /// rather than rejecting is deliberate: a constructor that could fail would make the caller
+    /// choose what to do about randomness that fell outside a range, and the only correct answer
+    /// is to draw again — which this does arithmetically and without a loop.
+    #[must_use]
+    pub const fn ephemeral(randomness: u64) -> Self {
+        // `OPERATIONAL_MAX` is `0xFFFF_FFEF_FFFF_FFFF`, so the top byte is the only part that
+        // can land outside the range; clearing its high nibble keeps the value inside it, and
+        // `| 1` keeps it away from `Unspecified`.
+        Self((randomness & 0x0FFF_FFFF_FFFF_FFFF) | 1)
+    }
+
     /// The group this Node ID names, if it is a Group Node ID.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a Group Node ID is 0xFFFF_FFFF_FFFF_xxxx, so the group id is exactly the low 16 bits"
+    )]
     pub const fn group(self) -> Option<GroupId> {
         match self.kind() {
             NodeIdKind::Group => Some(GroupId(self.0 as u16)),
@@ -116,6 +139,10 @@ impl CaseAuthenticatedTag {
 
     /// The lower 16 bits.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a CAT's version is defined as the low 16 bits of the identifier (§6.5.6.3)"
+    )]
     pub const fn version(self) -> u16 {
         self.0 as u16
     }
@@ -138,6 +165,10 @@ impl CaseAuthenticatedTag {
 
     /// Recovers a CAT from that sub-encoding, or `None` if the Node ID is not one.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a CASE Authenticated Tag Node ID carries the tag in its low 32 bits"
+    )]
     pub const fn from_node_id(node_id: NodeId) -> Option<Self> {
         match node_id.kind() {
             NodeIdKind::CaseAuthenticatedTag => Some(Self(node_id.0 as u32)),

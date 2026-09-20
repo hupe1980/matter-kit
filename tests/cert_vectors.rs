@@ -480,7 +480,7 @@ fn a_signature_does_not_verify_against_the_wrong_key() {
 
 #[test]
 fn a_future_extension_is_copied_back_into_the_der_verbatim() {
-    // §6.5.11.7: the field "SHALL be an exact copy of the DER encoded extension field
+    // §6.5.11.6: the field "SHALL be an exact copy of the DER encoded extension field
     // (including the DER encoded ASN.1 OID of the extension) in the corresponding X.509
     // certificate". So it is not an extension this crate has to understand — it is one it must
     // not touch. Regenerating the certificate means putting the octets back, at their place in
@@ -507,7 +507,7 @@ fn a_future_extension_is_copied_back_into_the_der_verbatim() {
     // It appears exactly once, byte for byte.
     let hits = der_bytes.windows(BLOB.len()).filter(|w| *w == BLOB).count();
     assert_eq!(hits, 1, "the blob is copied through untouched");
-    // And it is last, because it was pushed last: §6.5.11.7 requires the original order.
+    // And it is last, because it was pushed last: §6.5.11.6 requires the original order.
     let start = der_bytes
         .windows(BLOB.len())
         .position(|w| w == BLOB)

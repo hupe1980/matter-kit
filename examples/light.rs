@@ -39,7 +39,10 @@
     clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
     clippy::print_stdout,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use core::cell::RefCell;
@@ -124,14 +127,19 @@ const PRODUCT: Product<'static> = Product::new(
     PRODUCT_ID,
     "matter-kit-light-0001",
 )
-// §11.1.4.4's `CapabilityMinimaStruct` is what this node *guarantees*, and those numbers are
-// `Config`'s — not a product's to invent. `from_config` reads them, so they cannot drift away
-// from the tables they describe the first time a size changes.
-.with_capability_minima(CapabilityMinima::from_config::<DefaultConfig>());
+// §11.1.4.4's `CapabilityMinimaStruct` is what this node *guarantees*, and the specification
+// says each field is "the **actual**" number — so every one of them comes from the table that
+// will have to honour it, never from a constant typed beside it. Change `Stack` or
+// `Subscriptions` below and this attribute changes with them.
+.with_capability_minima(CapabilityMinima::from_tables::<
+    DefaultConfig,
+    Sessions,
+    Subscriptions,
+>());
 
-const ACL_ENTRIES: usize = DefaultConfig::ACL_ENTRIES;
-const ACL_SUBJECTS: usize = DefaultConfig::ACL_SUBJECTS;
-const ACL_TARGETS: usize = DefaultConfig::ACL_TARGETS;
+const ACL_ENTRIES: usize = 20;
+const ACL_SUBJECTS: usize = 4;
+const ACL_TARGETS: usize = 3;
 
 /// What the factory burned in (§9.8): read-only, and not a commissioner's to change.
 const FIXED_LABELS: &[Label<'static>] = &[match Label::new("model", "matter-kit") {
@@ -210,16 +218,15 @@ type GroupTable<'a> =
 /// It was `16` — a round number, next to sixteen sessions, so a node with more than one
 /// controller had fewer than one exchange each. The same mistake as D80, D89 and D91: a bound
 /// chosen because it looked big enough rather than derived from what it bounds.
-type Stack = Messaging<
-    DefaultConfig,
-    { DefaultConfig::SESSIONS },
-    { DefaultConfig::SESSIONS * DefaultConfig::EXCHANGES_PER_SESSION },
->;
+type Stack = Messaging<DefaultConfig, 16, 64>;
 
-/// How many paths one subscription may name. §8.5's wildcard case needs few: a whole-node
-/// subscription is one path with every field absent.
-const SUB_PATHS: usize = DefaultConfig::SUB_PATHS;
-type Subscriptions = SubscriptionTable<DefaultConfig, { DefaultConfig::SUBSCRIPTIONS }, SUB_PATHS>;
+/// §8.5's subscriptions, at the specification's own minimum for five fabrics: three each, and
+/// three paths apiece. A whole-node subscription is one path with every field absent, so few is
+/// enough. `SubscriptionTable::CHECK` refuses anything smaller at compile time.
+type Subscriptions = SubscriptionTable<DefaultConfig>;
+
+/// The session table, named so that `CapabilityMinima` can be derived from it.
+type Sessions = matter_kit::session::SessionTable<DefaultConfig, 16>;
 
 /// What the node owes a subscriber between its priming report and its `SubscribeResponse`.
 ///
@@ -469,12 +476,9 @@ fn main() {
     // that serves Groups at all — which this one does, on endpoint 1. Without it a commissioner
     // cannot write or read the group key set it needs to address the node by group, and
     // `KeySetRead` comes back `UnsupportedCluster`.
-    let group_key_descriptor = GroupKeyManagement::<
-        Memberships<'_>,
-        { DefaultConfig::GROUP_KEYS },
-        { DefaultConfig::GROUPS },
-    >::conforming(0, &Optional::NONE)
-    .expect("the const parameters hold the Group Key Management set");
+    let group_key_descriptor =
+        GroupKeyManagement::<DefaultConfig, Memberships<'_>>::conforming(0, &Optional::NONE)
+            .expect("the const parameters hold the Group Key Management set");
     let scenes_descriptor =
         Scenes::<Lamp, GroupTable, SCENE_SLOTS, SCENE_BYTES, FABRICS>::conforming(
             scenes::feature::SCENE_NAMES,
@@ -625,10 +629,9 @@ fn main() {
         Groups::with(GROUPS_PER_FABRIC, true, &identify_cluster, &scene_table);
     let scenes_cluster = Scenes::new(&scene_table, &groups_cluster, &lamp, true);
     let memberships = Memberships(&groups_cluster);
-    let group_keys = RefCell::new(matter_kit::group::GroupKeys::<
-        { DefaultConfig::GROUP_KEYS },
-        { DefaultConfig::GROUPS },
-    >::new(GROUPS_PER_FABRIC, 3));
+    // The per-fabric quotas §11.2.6.2 and §11.2.6.3 advertise are `Config`'s, and `K`/`M` are
+    // asserted at compile time to be big enough for all five fabrics to have theirs.
+    let group_keys = RefCell::new(matter_kit::group::GroupKeys::<DefaultConfig>::new());
     let group_keys_cluster = GroupKeyManagement::new(&group_keys, &memberships);
     // Named rather than built inline, because §11.18.6.8's `AddNOC` does not finish inside
     // the cluster: it *reports* what the node must do next through `take_change`, and step 7
@@ -919,12 +922,11 @@ fn main() {
             // and believes it has the whole node. With a `MinIntervalFloor` of zero —
             // which is what the CHIP test framework asks for — that race is not a race
             // at all, it is the ordinary case.
-            let due_now: heapless::Vec<(u32, ReportReason), { DefaultConfig::SUBSCRIPTIONS }> =
-                subscriptions
-                    .due(now)
-                    .filter(|(s, _)| !interactions.priming(s.id))
-                    .map(|(s, reason)| (s.id, reason))
-                    .collect();
+            let due_now: heapless::Vec<(u32, ReportReason), 15> = subscriptions
+                .due(now)
+                .filter(|(s, _)| !interactions.priming(s.id))
+                .map(|(s, reason)| (s.id, reason))
+                .collect();
             for (id, reason) in due_now {
                 if reporting.iter().any(|(pending, _)| *pending == id) {
                     continue;
@@ -1988,15 +1990,19 @@ fn dispatch_one<A: matter_kit::im::AccessControl, H: matter_kit::im::ClusterHand
             // A wildcard subscription is the normal case — every certification test in the CHIP
             // SDK's Python suite starts one over the whole node — and it is as large as the
             // read that primes it, so it chunks exactly like one (§10.2.3).
-            let mut paths: heapless::Vec<matter_kit::im::AttributePath, SUB_PATHS> =
-                heapless::Vec::new();
+            let mut paths: heapless::Vec<
+                matter_kit::im::AttributePath,
+                { <Subscriptions as matter_kit::SubscriptionCapacity>::PATHS },
+            > = heapless::Vec::new();
             if let Some(iter) = request.attribute_paths()? {
                 for path in iter {
                     let _ = paths.push(path?);
                 }
             }
-            let mut event_paths: heapless::Vec<matter_kit::im::EventPath, SUB_PATHS> =
-                heapless::Vec::new();
+            let mut event_paths: heapless::Vec<
+                matter_kit::im::EventPath,
+                { <Subscriptions as matter_kit::SubscriptionCapacity>::PATHS },
+            > = heapless::Vec::new();
             if let Some(iter) = request.event_paths()? {
                 for path in iter {
                     let _ = event_paths.push(path?);

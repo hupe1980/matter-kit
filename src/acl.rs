@@ -190,9 +190,10 @@ impl Target {
 
 /// One access control entry (§9.10.5.7's `AccessControlEntryStruct`).
 ///
-/// `S` and `T` bound the subject and target lists; they come from
-/// [`Config::ACL_SUBJECTS`] and [`Config::ACL_TARGETS`], which §9.10.6 requires to be at
-/// least 4 and 3 respectively.
+/// `S` and `T` bound the subject and target lists, and are exactly what §9.10.6.5's
+/// `SubjectsPerAccessControlEntry` and §9.10.6.6's `TargetsPerAccessControlEntry` report —
+/// constrained to `4..=65534` and `3..=65534`, which [`Acl::CHECK`] holds them to. They default
+/// to those minima.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry<const S: usize, const T: usize> {
     /// The fabric this entry belongs to, and the only one that can see it.
@@ -561,12 +562,49 @@ fn subject_matches(acl_subject: NodeId, isd_subject: NodeId) -> bool {
 
 /// A node's Access Control List, and the decision it exists to make (§6.6).
 ///
-/// `N` is [`Config::ACL_ENTRIES`], `S` is [`Config::ACL_SUBJECTS`] and `T` is
-/// [`Config::ACL_TARGETS`].
+/// `N` is how many entries the list holds across every fabric, and `S` and `T` how many
+/// subjects and targets one entry may name. All three default to the specification's minima for
+/// a five-fabric node; [`Acl::CHECK`] refuses anything smaller, against the `Config` the list is
+/// parameterised by, so a node cannot promise a share of a list it does not have.
 #[derive(Debug)]
-pub struct Acl<C: Config, const N: usize, const S: usize, const T: usize> {
+pub struct Acl<C: Config, const N: usize = 20, const S: usize = 4, const T: usize = 3> {
     entries: Vec<Entry<S, T>, N>,
     _config: PhantomData<C>,
+}
+
+impl<C: Config, const N: usize, const S: usize, const T: usize> crate::config::Capacity
+    for Acl<C, N, S, T>
+{
+    const TOTAL: usize = N;
+    /// §9.10.6.7's `AccessControlEntriesPerFabric`: the fixed share each fabric is promised.
+    const PER_FABRIC: usize = C::ACL_ENTRIES_PER_FABRIC;
+}
+
+impl<C: Config, const N: usize, const S: usize, const T: usize> Acl<C, N, S, T> {
+    /// Compile-time proof that this list can keep §2.11.1.1's promise, and that its entries are
+    /// wide enough for §9.10.6.5 and §9.10.6.6.
+    ///
+    /// > at least four Access Control Entries available for every fabric supported by the node
+    ///
+    /// `S` and `T` are the values `SubjectsPerAccessControlEntry` and
+    /// `TargetsPerAccessControlEntry` report, and their constraints are `4 to 65534` and
+    /// `3 to 65534` — so a narrower entry is a node whose own attribute is out of constraint.
+    pub const CHECK: () = {
+        let () = AssertValid::<C>::CHECK;
+        assert!(
+            N >= C::ACL_ENTRIES_PER_FABRIC * C::FABRICS,
+            "Acl: Core §2.11.1.1 promises ACL_ENTRIES_PER_FABRIC to every fabric, so the list \
+             must hold FABRICS × that many"
+        );
+        assert!(
+            S >= 4,
+            "Acl: §9.10.6.5 constrains SubjectsPerAccessControlEntry to 4..=65534"
+        );
+        assert!(
+            T >= 3,
+            "Acl: §9.10.6.6 constrains TargetsPerAccessControlEntry to 3..=65534"
+        );
+    };
 }
 
 impl<C: Config, const N: usize, const S: usize, const T: usize> Default for Acl<C, N, S, T> {
@@ -579,7 +617,7 @@ impl<C: Config, const N: usize, const S: usize, const T: usize> Acl<C, N, S, T> 
     /// An empty list — what a factory-fresh node has (§9.10.6.1).
     #[must_use]
     pub fn new() -> Self {
-        let () = AssertValid::<C>::CHECK;
+        let () = Self::CHECK;
         Self {
             entries: Vec::new(),
             _config: PhantomData,
@@ -628,7 +666,7 @@ impl<C: Config, const N: usize, const S: usize, const T: usize> Acl<C, N, S, T> 
         if !entry.is_well_formed() {
             bail!(InvalidArgument)
         }
-        if self.len_of_fabric(entry.fabric_index) >= C::ACL_ENTRIES_PER_FABRIC {
+        if self.len_of_fabric(entry.fabric_index) >= <Self as crate::config::Capacity>::PER_FABRIC {
             bail!(NoSpace)
         }
         self.entries
@@ -862,13 +900,10 @@ mod tests {
         AttributeDescriptor, ClusterDescriptor, CommandDescriptor, DeviceType, Endpoint,
     };
 
-    type TestAcl = Acl<
-        DefaultConfig,
-        { DefaultConfig::ACL_ENTRIES },
-        { DefaultConfig::ACL_SUBJECTS },
-        { DefaultConfig::ACL_TARGETS },
-    >;
-    type TestEntry = Entry<{ DefaultConfig::ACL_SUBJECTS }, { DefaultConfig::ACL_TARGETS }>;
+    // The defaults are the specification's own minima for `DefaultConfig`, so naming none of
+    // them is what a conformant node looks like.
+    type TestAcl = Acl<DefaultConfig>;
+    type TestEntry = Entry<4, 3>;
 
     const ATTRS: &[AttributeDescriptor] = &[AttributeDescriptor::read_only(0)];
     const NO_CMDS: &[CommandDescriptor] = &[];

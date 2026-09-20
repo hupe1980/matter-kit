@@ -467,6 +467,78 @@ impl<'a> TlvReader<'a> {
         r.finish()?;
         Ok(count)
     }
+
+    /// The first container with no members under a context-specific tag, if there is one.
+    ///
+    /// **What you write, somebody stricter will read.** An optional structure encoded with
+    /// nothing in it is legal Appendix A, accepted by this crate's decoder, and refused by every
+    /// released CHIP SDK — so the rule kept here is stricter than the specification's: an
+    /// optional structure that would be empty is not written at all.
+    ///
+    /// It cannot live in [`TlvWriter`](crate::tlv::TlvWriter), because §4.14.1.2 gives empty a
+    /// meaning: an empty `PBKDFParamResponse.pbkdf_parameters [4]` encodes "the initiator
+    /// already has them", which is a claim rather than an absence. So the rule is checked *over*
+    /// the writer, on encoded output, and the caller knows its own exceptions.
+    ///
+    /// Two narrowings, and both matter. **Only structures** — an empty array or list is a value,
+    /// and a node that wrote nothing has to be able to say so. **Only context-specific tags** —
+    /// an anonymous empty structure is an element of the list containing it, not an absent field.
+    ///
+    /// ```
+    /// use matter_kit::tlv::{ContainerKind, Tag, TlvReader, TlvWriter};
+    ///
+    /// let mut buf = [0u8; 32];
+    /// let mut w = TlvWriter::new(&mut buf);
+    /// w.start(Tag::Anonymous, ContainerKind::Structure).unwrap();
+    /// w.start(Tag::Context(4), ContainerKind::Structure).unwrap();   // optional, and empty
+    /// w.end_container().unwrap();
+    /// w.end_container().unwrap();
+    /// let encoded = w.finish().unwrap();
+    ///
+    /// assert_eq!(TlvReader::first_empty_optional(encoded).unwrap(), Some(Tag::Context(4)));
+    /// ```
+    ///
+    /// Errors only when `buf` is not well-formed TLV; [`TlvReader::validate`] is the check that
+    /// makes that complaint.
+    pub fn first_empty_optional(buf: &'a [u8]) -> Result<Option<Tag>> {
+        let mut r = Self::new(buf);
+        // The tag of each container currently open, innermost last, and whether anything has
+        // been written inside it yet.
+        let mut open: heapless::Vec<(Tag, bool, crate::tlv::ContainerKind), 16> =
+            heapless::Vec::new();
+        while let Some(element) = r.next_element()? {
+            match element.value {
+                Value::Container(kind) => {
+                    if let Some((_, seen, _)) = open.last_mut() {
+                        *seen = true;
+                    }
+                    if open.push((element.tag, false, kind)).is_err() {
+                        // Deeper than Appendix A's own nesting limit, which `next_element` has
+                        // already refused — so this is unreachable, and saying so is cheaper
+                        // than a second error code nobody can produce.
+                        bail!(TlvContainerMismatch)
+                    }
+                }
+                Value::EndOfContainer => {
+                    let Some((tag, seen, kind)) = open.pop() else {
+                        bail!(TlvContainerMismatch)
+                    };
+                    let empty_structure =
+                        !seen && matches!(kind, crate::tlv::ContainerKind::Structure);
+                    if empty_structure && matches!(tag, Tag::Context(_)) {
+                        return Ok(Some(tag));
+                    }
+                }
+                _ => {
+                    if let Some((_, seen, _)) = open.last_mut() {
+                        *seen = true;
+                    }
+                }
+            }
+        }
+        r.finish()?;
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

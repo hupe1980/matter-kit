@@ -122,11 +122,12 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 
 ## Verification
 
-A light linked for an nRF52840 occupies **88 KiB of flash and 39 KiB of RAM** — `.text` 85 688,
-`.rodata` 4 516, `.bss` 40 584 — measured by `./footprint/run.sh`, which builds the image and
-reads the sections out of it. No radio is in that image.
+A light linked for an nRF52840 occupies **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM** — `.text` 85 744,
+`.rodata` 4 516, `.bss` 40 576 — measured by `./footprint/run.sh`, which builds the image,
+reads the sections out of it and writes them where `cargo xtask stats` can check this page
+against them. No radio is in that image.
 
-1794 tests, twenty-seven fuzz targets clean, builds for `thumbv7em-none-eabihf` and
+1823 tests, <!-- stats:fuzz-targets -->27<!-- /stats --> fuzz targets clean, builds for `thumbv7em-none-eabihf` and
 `riscv32imac-unknown-none-elf`, and a full feature powerset. See
 [Testing](@/docs/testing.md) for what each of those actually checks.
 

@@ -207,6 +207,10 @@ impl OnboardingPayload {
     }
 
     /// Reads the packed structure back.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "every `take` here is width-exact: §5.1.3.1.3's fields are 27, 16, 12, 8 and 2 bits"
+    )]
     pub fn unpack(bytes: &[u8]) -> Result<Self> {
         let Some(packed) = bytes.get(..PACKED_LEN) else {
             bail!(MessageTruncated)
@@ -304,6 +308,10 @@ impl OnboardingPayload {
     ///
     /// The discriminator that comes back has only its top four bits set; the rest are
     /// zero, because a manual code does not carry them.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "`bounded` holds each group to the width §5.1.4.1.4's tables give it, before any cast"
+    )]
     pub fn from_manual_code(text: &str) -> Result<Self> {
         let mut digits = heapless::Vec::<u8, MANUAL_CODE_MAX_DIGITS>::new();
         for c in text.chars() {
@@ -338,16 +346,21 @@ impl OnboardingPayload {
             bail!(InvalidArgument)
         }
 
-        let group2 = digits_value(&digits, 1, 5)?;
-        let group3 = digits_value(&digits, 6, 4)?;
+        // §5.1.4.1.4's Tables 63 and 64 state the range of every group, and a group outside it
+        // is not a code this encoding produced. Reading one anyway is worse than refusing it:
+        // the surplus bits fall off a mask or an `as`, so an invalid code decodes — silently —
+        // to a *different* device's discriminator, passcode or vendor. `push_digits` has always
+        // refused to write a value too wide for its group; this is the reading half of that.
+        let group2 = bounded(digits_value(&digits, 1, 5)?, 0xFFFF)?;
+        let group3 = bounded(digits_value(&digits, 6, 4)?, 0x1FFF)?;
 
         let discriminator = (((first & 0b011) << 10) | ((group2 & 0xC000) >> 6)) as u16;
         let passcode = Passcode::new((group2 & 0x3FFF) | (group3 << 14))?;
 
         let (vendor_id, product_id) = if vid_pid_present {
             (
-                VendorId(digits_value(&digits, 10, 5)? as u16),
-                digits_value(&digits, 15, 5)? as u16,
+                VendorId(bounded(digits_value(&digits, 10, 5)?, 0xFFFF)? as u16),
+                bounded(digits_value(&digits, 15, 5)?, 0xFFFF)? as u16,
             )
         } else {
             (VendorId(0), 0)
@@ -400,6 +413,18 @@ fn push_digits<const N: usize>(
         .map_err(|_| Error::new(ErrorCode::NoSpace))
 }
 
+/// A digit group's value, refused if it is wider than the field it encodes.
+///
+/// §5.1.4.1.4's tables give each group a range — 00000..=65535 for the two 16-bit groups,
+/// 0000..=8191 for the 13-bit one — and a five-digit group can hold 99999. The difference is
+/// exactly the space in which an invalid code would otherwise decode to a valid-looking one.
+const fn bounded(value: u32, max: u32) -> Result<u32> {
+    if value > max {
+        return Err(Error::new(ErrorCode::InvalidArgument));
+    }
+    Ok(value)
+}
+
 fn digits_value(digits: &[u8], start: usize, width: usize) -> Result<u32> {
     let end = start
         .checked_add(width)
@@ -449,6 +474,10 @@ fn base38_encode<const N: usize>(data: &[u8], out: &mut heapless::String<N>) -> 
 }
 
 /// Decodes base-38 into `out`, returning how many octets it produced.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a base-38 group is checked against its own byte width before its octets are taken"
+)]
 fn base38_decode(text: &str, out: &mut [u8]) -> Result<usize> {
     let bytes = text.as_bytes();
     let mut written = 0usize;

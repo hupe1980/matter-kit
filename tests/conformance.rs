@@ -88,6 +88,13 @@ fn describe(spec: &matter_kit::dm::spec::Cluster, defect: Defect) -> String {
         Defect::ResponseAccepted(id) => {
             format!("response command {id:#04X} is in the accepted list")
         }
+        Defect::Provisional(element) => format!(
+            "{} is provisional, and this build did not ask for provisional mechanisms",
+            named(element)
+        ),
+        // `Defect` is `#[non_exhaustive]`: a kind added upstream should read as an unexplained
+        // defect here rather than stop this file compiling.
+        other => format!("{other:?}"),
     }
 }
 
@@ -117,7 +124,10 @@ fn general_commissioning_matches_the_specification() {
     check(&general_commissioning::cluster());
     // §5.9's Network Recovery is a feature, and §7.3 makes two attributes mandatory exactly
     // when it is set — so the descriptor a recovery-capable node serves is a different list,
-    // and it has to be checked as one.
+    // and it has to be checked as one. It is provisional (Core §2.13.6), so it exists only on a
+    // build that asked for provisional mechanisms; on any other, furnishing it is itself the
+    // defect `check` would report.
+    #[cfg(feature = "provisional")]
     check(&general_commissioning::cluster_with_recovery());
 }
 

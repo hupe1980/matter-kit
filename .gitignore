@@ -34,3 +34,12 @@ data_model/
 
 # Zola build output
 site/public/
+
+# `footprint/run.sh` writes this so `cargo xtask stats` can read the figure it measured. It
+# describes one machine's build, so it is not a fact about the repository.
+footprint/last.json
+
+# `cargo cyclonedx` writes this; the release workflow produces it as an artefact rather than
+# committing it, because it describes one resolution of one version.
+matter-kit.cdx.json
+*.cdx.json

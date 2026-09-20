@@ -270,6 +270,10 @@ impl<'a> TlvWriter<'a> {
     }
 
     /// Writes a signed integer at its narrowest legal width.
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "a two's-complement reinterpretation before a little-endian write of exactly `n` octets"
+    )]
     pub fn signed(&mut self, tag: Tag, value: i64) -> Result<()> {
         let w = Width::for_signed(value);
         self.head(tag, ElementType::SignedInt(w))?;

@@ -307,6 +307,7 @@ const ATTRIBUTES: &[AttributeDescriptor] = &[
 /// are `RA`: only an administrator may read them, because together they say "this node has lost
 /// its network, and here is the identifier it is advertising", which is not for everyone with a
 /// session.
+#[cfg(feature = "provisional")]
 const RECOVERY_ATTRIBUTES: &[AttributeDescriptor] = &[
     AttributeDescriptor::read_write(BREADCRUMB).with_access(Access::read_write_with(
         Privilege::View,
@@ -366,6 +367,14 @@ pub const fn cluster() -> ClusterDescriptor<'static> {
 /// `RecoveryIdentifier` and `NetworkRecoveryReason` mandatory exactly when `NR` is set, so a
 /// descriptor that advertised one without the other would fail
 /// [`dm::spec`](crate::dm::spec)'s own validation.
+///
+/// Behind `provisional`, because Network Recovery is Core §2.13.6's and its two attributes are
+/// marked `P`. This is the only constructor that furnishes them, so gating it is what makes
+/// "provisional means off" true for this cluster rather than merely asserted — and
+/// [`Cluster::validate`](crate::dm::spec::Cluster::validate) reports the same thing about any
+/// descriptor that furnishes a `P` element on a build that did not ask for one.
+#[cfg(feature = "provisional")]
+#[cfg_attr(docsrs, doc(cfg(feature = "provisional")))]
 #[must_use]
 pub const fn cluster_with_recovery() -> ClusterDescriptor<'static> {
     ClusterDescriptor {

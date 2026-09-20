@@ -35,7 +35,7 @@ around four decisions that are hard to retrofit:
 **📦 One crate.** Not a family to keep in version step. Everything optional is a Cargo
 feature. The code generator is repository tooling (`cargo xtask`), not a dependency.
 
-**📖 The cluster library is generated, and it knows its own rules.** All 135 clusters and 91
+**📖 The cluster library is generated, and it knows its own rules.** All <!-- stats:clusters -->135<!-- /stats --> clusters and <!-- stats:device-types -->91<!-- /stats -->
 device types come from the CSA's machine-readable data model — the same files the Test Harness
 reads — with the **conformance expression** for every element. So the crate can tell you that
 `StartUpOnOff` is mandatory with the Lighting feature and forbidden without it, check your
@@ -51,30 +51,36 @@ let light = Conforming::<8, 8, 4, 4>::new(
 // Five attributes and six commands, none of them written down anywhere.
 ```
 
-**📏 Sizing is a type, not a build flag.** Every table — fabrics, sessions, exchanges,
-subscriptions, access-control entries — is a fixed-capacity array whose length comes from a
-`Config` trait. The specification's minima are `const` assertions, so a node that could not
-pass certification does not compile:
+**📏 A capacity is checked against the specification.** Every table — fabrics, sessions, exchanges,
+subscriptions, access-control entries — is a fixed-capacity array, and each one carries a
+`const` assertion that its capacity can keep the promises the node makes to every fabric. A
+node that could not pass certification does not compile, and the failing rule is named in the
+build error:
 
 ```rust
-use matter_kit::Config;
+use matter_kit::{DefaultConfig, acl::Acl};
 
-struct Light;
-impl Config for Light {
-    const FABRICS: usize = 5;      // Core §11.18.5.3 constrains this to 5..=254
-    const SESSIONS: usize = 16;    // Core §4.14.2.8 wants ≥ 3 per fabric
-}
+// Every capacity defaults to the specification's own minimum, so this is a conformant node.
+let acl: Acl<DefaultConfig> = Acl::new();
+
+// error: Acl: Core §2.11.1.1 promises ACL_ENTRIES_PER_FABRIC to every fabric,
+//        so the list must hold FABRICS × that many
+// let too_small: Acl<DefaultConfig, 4, 4, 3> = Acl::new();
 ```
 
-Cargo features cannot do this: they are global and additive, so two crates in one binary
-that want different sizes silently get the union, and nothing checks the result against the
+`Config` carries what a capacity cannot tell you — how much of it each *fabric* is owed, which
+is also what the node advertises in `CapabilityMinima`, `SupportedFabrics` and
+`AccessControlEntriesPerFabric`. Those attributes are read from the tables, never from a number
+typed beside them, because the specification says each is "the **actual**" figure.
+
+Cargo features cannot do this: they are global and additive, so two crates in one binary that
+want different sizes silently get the union, and nothing checks the result against the
 specification.
 
-And the sizes are visible in the image rather than in a design note. `./footprint/run.sh` links
-a whole light for an nRF52840 and reads the sections out of it: **88 KiB of flash and 39 KiB of
-RAM**, of which 14 KiB is fifteen subscriptions and 9 KiB is five fabrics. Change `Config` and
-watch the RAM move. There is no radio in that image, so it measures this crate and not a
-finished product.
+And the sizes are in the image rather than in a design note. `./footprint/run.sh` links a whole
+light for an nRF52840 and reads the sections out: **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**, of
+which 14 KiB is fifteen subscriptions and 9 KiB is five fabrics. There is no radio in that
+image, so it measures this crate and not a finished product.
 
 **⚙️ No runtime is chosen for you.** The crate is `async` over `core::future` and reaches the
 outside world through small traits — sockets, timers, randomness, storage. No executor crate
@@ -87,9 +93,17 @@ delivered to every cluster a device serves; adding a cluster adds it to that fan
 indices are reused, so an entry that outlives its fabric is inherited by whoever gets that index
 next — which for an access-control entry is an administrator nobody granted.
 
-**🛡️ Nothing panics on network input.** `unwrap`, `expect`, `panic!` and slice indexing are
-denied crate-wide; every parser returns an error. Resource exhaustion is a value, so a
-device that runs out of exchanges answers `BUSY` rather than aborting.
+**🛡️ Nothing panics on network input, and nothing truncates it either.** `unwrap`, `expect`,
+`panic!`, slice indexing, unchecked arithmetic and the three casting lints are denied
+crate-wide — an `as` that drops the high bits is the same mistake as an overflow, arriving by a
+quieter door. Every deliberate cast carries the invariant that makes it safe. Every parser
+returns an error, and resource exhaustion is a value, so a device that runs out of exchanges
+answers `BUSY` rather than aborting.
+
+**🔐 And it answers to somebody who did not write it.** [`SECURITY.md`](SECURITY.md) has the
+disclosure address, what is in scope, the properties the crate guarantees and how each is
+checked, the support policy, and the limitations worth knowing before you ship. Releases publish
+through crates.io Trusted Publishing and carry a CycloneDX SBOM.
 
 <a id="status"></a>
 
@@ -113,15 +127,15 @@ breakdown — eighty-odd rows, each citing its specification section — is on t
 | Exchanges | the table, MRP's backoff curve, §4.10.3.1's protocol registration and §4.10.5.2's three rules for an unsolicited message — so a stranger cannot fill a fixed-capacity table and end session establishment | §4.10, §4.12 |
 | Discovery | DNS-SD records and TXT keys, a responder, RFC 6762's probe/announce/conflict schedule | §4.3 |
 | Large data | BDX and both OTA cluster halves, TLS Certificate and Client Management | §11.20, §11.22, ch. 14 |
-| Clusters | the generated library with its conformance and TLV types, and thirty-six hand-written cluster modules — On/Off, Level Control, Groups, Scenes, Mode Base, the energy clusters, all three network diagnostics clusters over driver traits, the commissioning clusters | Application Cluster, Device Library |
+| Clusters | the generated library with its conformance and TLV types, and <!-- stats:cluster-behaviours -->36<!-- /stats --> hand-written cluster modules — On/Off, Level Control, Groups, Scenes, Mode Base, the energy clusters, all three network diagnostics clusters over driver traits, the commissioning clusters | Application Cluster, Device Library |
 
 **Not yet written:** most of the application clusters' *behaviour* behind the generated
 descriptors, device attestation revocation and the DCL, the per-chip radio drivers, and the
 typed client layer over the generated types.
 
-1794 tests; twenty-seven fuzz targets clean; builds for `thumbv7em-none-eabihf` and
-`riscv32imac-unknown-none-elf`, and **links** for the first of them into 88 KiB of flash and
-39 KiB of RAM; the feature powerset checked in full.
+1823 tests across <!-- stats:test-files -->75<!-- /stats --> files; <!-- stats:fuzz-targets -->27<!-- /stats --> fuzz targets clean; builds for `thumbv7em-none-eabihf` and
+`riscv32imac-unknown-none-elf`, and **links** for the first of them into <!-- stats:flash-kib -->88<!-- /stats --> KiB of flash
+and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM; the feature powerset checked in full.
 
 And one check worth more than the rest, because it is the only one without this crate on both
 ends: `./interop/chip/run.sh` has the CHIP SDK's own `chip-tool` — the controller every

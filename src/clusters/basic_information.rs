@@ -173,44 +173,65 @@ pub struct CapabilityMinima {
 }
 
 impl CapabilityMinima {
-    /// The values a node with this [`Config`](crate::config::Config) actually guarantees.
+    /// The values a node actually guarantees, taken from the tables that will answer for them.
     ///
-    /// §11.1.4.4 marks `SimultaneousInvocationsSupported`, `SimultaneousWritesSupported`,
-    /// `ReadPathsSupported` and `SubscribePathsSupported` **mandatory from cluster revision 6**,
-    /// and this cluster declares revision 6 — so [`CapabilityMinima::default`], which leaves
-    /// them absent, describes a node of an older revision than the one it claims to be.
+    /// §11.1.4.4 says each field "SHALL indicate the **actual**" number the node supports, so
+    /// every one of them has exactly one honest source: the table. `S` is the session table and
+    /// `B` the subscription table, both of which publish their real capacity through
+    /// [`Capacity`](crate::config::Capacity); `read_paths` is
+    /// [`Config::READ_PATHS`](crate::config::Config::READ_PATHS), the one figure here that is a
+    /// promise about work rather than storage.
     ///
-    /// They are computed here rather than asked of the integrator because the integrator does
-    /// not know them: they are `Config`'s own limits, and a hand-written number beside a
-    /// `Config` is a number that stops being true the first time the `Config` changes. This is
-    /// the same rule as `config::MAX_UDP_PAYLOAD` and
-    /// `operational_credentials::max_nocs_len` — where only the library can compute a bound,
-    /// the library states it.
+    /// ```
+    /// # #[cfg(feature = "rustcrypto")] fn main() {
+    /// use matter_kit::clusters::basic_information::CapabilityMinima;
+    /// use matter_kit::{DefaultConfig, im::SubscriptionTable, session::SessionTable};
+    ///
+    /// type Sessions = SessionTable<DefaultConfig, 16>;
+    /// type Subs = SubscriptionTable<DefaultConfig>;
+    /// let minima = CapabilityMinima::from_tables::<DefaultConfig, Sessions, Subs>();
+    /// assert_eq!(minima.case_sessions_per_fabric, 3); // 16 sessions over 5 fabrics
+    /// # }
+    /// # #[cfg(not(feature = "rustcrypto"))] fn main() {}
+    /// ```
+    ///
+    /// There is deliberately no `from_config`. A `Config` cannot size a table, so a figure
+    /// derived from one describes whatever the integrator wrote next to it — and this attribute
+    /// is read during certification.
     ///
     /// `SimultaneousInvocationsSupported` and `SimultaneousWritesSupported` take the
     /// specification's floor of 1: this crate serves one interaction at a time per exchange,
     /// and §8.8.2.3's `MaxPathsPerInvoke` — a separate attribute — is what bounds the paths
     /// inside one of them.
     #[must_use]
-    pub const fn from_config<C: crate::config::Config>() -> Self {
-        // §4.14.2.8's "at least 3 CASE session contexts per fabric" is the floor; what this
-        // node guarantees is its session table divided among its fabrics.
-        let per_fabric = match C::SESSIONS.checked_div(C::FABRICS) {
-            Some(n) => n,
-            // `Config::FABRICS` is at least 5 by `AssertValid`, so this is unreachable; the
-            // match is here because a `const fn` may not unwrap.
-            None => 3,
-        };
-        let case_sessions_per_fabric = if per_fabric < 3 { 3 } else { per_fabric };
+    pub const fn from_tables<C, S, B>() -> Self
+    where
+        C: crate::config::Config,
+        S: crate::config::Capacity,
+        B: crate::config::SubscriptionCapacity,
+    {
         Self {
-            case_sessions_per_fabric: case_sessions_per_fabric as u16,
-            subscriptions_per_fabric: C::SUBSCRIPTIONS_PER_FABRIC as u16,
+            case_sessions_per_fabric: saturate(S::PER_FABRIC),
+            subscriptions_per_fabric: saturate(B::PER_FABRIC),
             simultaneous_invocations: Some(1),
             simultaneous_writes: Some(1),
-            read_paths: Some(C::READ_PATHS as u16),
-            subscribe_paths: Some(C::SUB_PATHS as u16),
+            read_paths: Some(saturate(C::READ_PATHS)),
+            subscribe_paths: Some(saturate(B::PATHS)),
         }
     }
+}
+
+/// `usize` to `uint16`, clamped rather than wrapped.
+///
+/// §11.1.4.4 caps every field at 10000, and a node that somehow held more would otherwise
+/// report the low sixteen bits of it — a smaller number than the truth, which is the one
+/// direction this attribute must never be wrong in.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the branch above is the truncation check — §11.1.4.4 caps every field at 10000"
+)]
+const fn saturate(n: usize) -> u16 {
+    if n > 10_000 { 10_000 } else { n as u16 }
 }
 
 impl Default for CapabilityMinima {

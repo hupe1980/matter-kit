@@ -407,6 +407,10 @@ fn clamp_ms_u16(d: Duration) -> u16 {
 /// steps; saturating keeps the clamp in [`SessionParams::to_mrp`] in charge of the only
 /// values that can hurt this node.
 #[cfg(feature = "rustcrypto")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the branch above is the saturation"
+)]
 const fn saturating_u32(v: u64) -> u32 {
     if v > u32::MAX as u64 {
         u32::MAX
@@ -416,6 +420,10 @@ const fn saturating_u32(v: u64) -> u32 {
 }
 
 #[cfg(feature = "rustcrypto")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the branch above is the saturation"
+)]
 const fn saturating_u16(v: u64) -> u16 {
     if v > u16::MAX as u64 {
         u16::MAX

@@ -9,15 +9,19 @@ build does.
 ## Versions
 
 The crate is `0.x`, so Cargo's rule applies: **`0.y` is the compatibility unit**. A change that
-breaks source compatibility raises the minor — `0.2.0` — and a change that does not raises the
+breaks source compatibility raises the minor — `0.3.0` — and a change that does not raises the
 patch. `version = "0.2"` in your manifest therefore pins you to a line that will not break under
 you; `version = "0.2.1"` does the same thing with a floor.
 
 That is enforced rather than promised. `cargo-semver-checks` runs in CI on every push, compares
 the public API against the version on crates.io, and fails when the manifest's version has not
-been raised far enough for what changed. It is the reason `0.2.0` exists: removing seven `Config`
-constants nothing read, three methods nothing called, and adding two `Received` variants is a
-breaking change, and the tool said so before the release rather than after it.
+been raised far enough for what changed.
+
+It is the reason `0.3.0` is a minor bump rather than a patch. Run against `0.2.0` with a patch
+version it reports eight failures by name — ten `Config` constants removed,
+`CapabilityMinima::from_config` gone, `GroupKeys` and `IcdManagement` taking different
+parameters, `dm::spec::Defect` becoming `#[non_exhaustive]`. The tool says so before the release
+rather than a user discovering it after.
 
 Until `1.0` the API will keep moving. `CHANGELOG.md` in the repository says what moved and what
 to change; what follows is the policy behind it.
@@ -35,7 +39,7 @@ your code's shape:
 | `crypto::KeyStore` | where private keys live | the same rule |
 
 `ClusterHandler` sits just behind them: `read` is required, and everything else — `write`,
-`invoke`, `data_version`, `on_lifecycle` — has a default, so a cluster you wrote against `0.2.0`
+`invoke`, `data_version`, `on_lifecycle` — has a default, so a cluster you wrote against `0.3.0`
 keeps compiling when the trait grows.
 
 ## Deprecation

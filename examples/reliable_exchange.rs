@@ -14,7 +14,10 @@
 #![allow(
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use matter_kit::exchange::{Mrp, MrpParams, OnTimeout};

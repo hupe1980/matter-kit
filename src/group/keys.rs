@@ -6,6 +6,7 @@
 
 use heapless::Vec;
 
+use crate::config::Config;
 use crate::crypto::SymmetricKey;
 use crate::error::{Error, ErrorCode, Result};
 use crate::fabric::{CompressedFabricId, operational_group_key};
@@ -159,15 +160,16 @@ impl GroupKeySet {
 
 /// The per-fabric group state of §11.2: the key sets, and which key set each group uses.
 ///
-/// `K` bounds the key sets across every fabric and `M` the group-to-key-set map, which is what
-/// §11.2.6.3's `MaxGroupKeysPerFabric` and §11.2.6.2's `MaxGroupsPerFabric` report — so a device
-/// sizes them from the per-fabric minima and the number of fabrics it supports.
+/// `K` bounds the key sets across every fabric and `M` the group-to-key-set map. The per-fabric
+/// quotas §11.2.6.3's `MaxGroupKeysPerFabric` and §11.2.6.2's `MaxGroupsPerFabric` report come
+/// from [`Config`], and [`GroupKeys::CHECK`] refuses at compile time a `K` or `M` too small to
+/// give every fabric its share — which is the only way those two attributes can be the promise
+/// the specification says they are rather than a pair of numbers typed beside the table.
 #[derive(Debug)]
-pub struct GroupKeys<const K: usize, const M: usize> {
+pub struct GroupKeys<C: Config, const K: usize = 15, const M: usize = 20> {
     sets: Vec<GroupKeySet, K>,
     map: Vec<(FabricIndex, GroupId, KeySetId), M>,
-    per_fabric_sets: usize,
-    per_fabric_groups: usize,
+    _config: core::marker::PhantomData<C>,
 }
 
 /// An operational key a message can be sent or received under.
@@ -185,31 +187,60 @@ pub struct OperationalKey {
     pub session_id: u16,
 }
 
-impl<const K: usize, const M: usize> GroupKeys<K, M> {
-    /// An empty table.
+impl<C: Config, const K: usize, const M: usize> crate::config::Capacity for GroupKeys<C, K, M> {
+    const TOTAL: usize = K;
+    /// §11.2.6.3's `MaxGroupKeysPerFabric`.
+    const PER_FABRIC: usize = C::GROUP_KEYS_PER_FABRIC;
+}
+
+impl<C: Config, const K: usize, const M: usize> Default for GroupKeys<C, K, M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<C: Config, const K: usize, const M: usize> GroupKeys<C, K, M> {
+    /// Compile-time proof that both tables can keep §2.11.1.2's promises.
     ///
-    /// §11.2.6.2 constrains `MaxGroupsPerFabric` and §11.2.6.3 `MaxGroupKeysPerFabric`; the
-    /// per-fabric quotas are what stop the first fabric to provision from filling the table.
+    /// > at least four groups per fabric … at least three group keys per fabric
+    ///
+    /// The quotas are what stop the first fabric to provision from filling the table; this is
+    /// what stops the quotas from promising room that is not there.
+    pub const CHECK: () = {
+        let () = crate::config::AssertValid::<C>::CHECK;
+        assert!(
+            K >= C::GROUP_KEYS_PER_FABRIC * C::FABRICS,
+            "GroupKeys: Core §2.11.1.2 promises GROUP_KEYS_PER_FABRIC to every fabric, so K \
+             must be FABRICS × that many"
+        );
+        assert!(
+            M >= C::GROUPS_PER_FABRIC * C::FABRICS,
+            "GroupKeys: Core §2.11.1.2 promises GROUPS_PER_FABRIC to every fabric, so M must \
+             be FABRICS × that many"
+        );
+    };
+
+    /// An empty table.
     #[must_use]
-    pub const fn new(per_fabric_groups: usize, per_fabric_sets: usize) -> Self {
+    pub fn new() -> Self {
+        let () = Self::CHECK;
         Self {
             sets: Vec::new(),
             map: Vec::new(),
-            per_fabric_sets,
-            per_fabric_groups,
+            _config: core::marker::PhantomData,
         }
     }
 
     /// `MaxGroupsPerFabric` (§11.2.6.2).
     #[must_use]
     pub const fn max_groups_per_fabric(&self) -> usize {
-        self.per_fabric_groups
+        C::GROUPS_PER_FABRIC
     }
 
     /// `MaxGroupKeysPerFabric` (§11.2.6.3).
     #[must_use]
     pub const fn max_key_sets_per_fabric(&self) -> usize {
-        self.per_fabric_sets
+        C::GROUP_KEYS_PER_FABRIC
     }
 
     /// Every key set, for a device about to persist them.
@@ -244,7 +275,7 @@ impl<const K: usize, const M: usize> GroupKeys<K, M> {
             *existing = set;
             return Ok(());
         }
-        if self.count_sets(set.fabric_index) >= self.per_fabric_sets {
+        if self.count_sets(set.fabric_index) >= C::GROUP_KEYS_PER_FABRIC {
             return Err(Status::ResourceExhausted);
         }
         self.sets.push(set).map_err(|_| Status::ResourceExhausted)
@@ -303,7 +334,7 @@ impl<const K: usize, const M: usize> GroupKeys<K, M> {
             entry.2 = key_set;
             return Ok(());
         }
-        if self.count_groups(fabric) >= self.per_fabric_groups {
+        if self.count_groups(fabric) >= C::GROUPS_PER_FABRIC {
             return Err(Status::ResourceExhausted);
         }
         self.map
@@ -317,7 +348,7 @@ impl<const K: usize, const M: usize> GroupKeys<K, M> {
         fabric: FabricIndex,
         entries: &[(GroupId, KeySetId)],
     ) -> core::result::Result<(), Status> {
-        if entries.len() > self.per_fabric_groups {
+        if entries.len() > C::GROUPS_PER_FABRIC {
             return Err(Status::ResourceExhausted);
         }
         for (_, key_set) in entries {

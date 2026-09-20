@@ -40,7 +40,7 @@ use matter_kit::transport::btp::{
     negotiate,
 };
 
-type Stack = Messaging<DefaultConfig, 4, 8>;
+type Stack = Messaging<DefaultConfig>;
 /// A BTP SDU is a whole Matter message, so the reassembly buffer is §4.4.4's 1280 octets.
 type Btp = Session<1280>;
 
@@ -214,11 +214,11 @@ fn commission(device_att_mtu: u16) -> Traffic {
 
     // The commissioner knows where the device is: at the far end of a BLE connection.
     let out = commissioner
-        .open_to(
-            SessionId::UNSECURED,
+        .open_unsecured_to(
             ProtocolId::SECURE_CHANNEL,
             HANDLE,
             at(0),
+            0xC0DE_0011_2233_4455,
         )
         .expect("open");
 
@@ -394,31 +394,36 @@ fn a_ble_exchange_never_sets_the_reliability_flag() {
     // a message BTP has already delivered, and BTP would faithfully carry the duplicate.
     let mut node = Stack::new(0x2000, 0x100, 7);
     let ble = node
-        .open_to(
-            SessionId::UNSECURED,
+        .open_unsecured_to(
             ProtocolId::SECURE_CHANNEL,
             HANDLE,
             at(0),
+            0xC0DE_0011_2233_4455,
         )
         .expect("open");
     let mut datagram = [0u8; 256];
     let mut scratch = [0u8; 256];
-    node.send(
-        ble,
-        opcode::PBKDF_PARAM_REQUEST,
-        true,
-        b"request",
-        at(0),
-        0,
-        &mut scratch,
-        &mut datagram,
-    )
-    .expect("send");
+    let (len, _) = node
+        .send(
+            ble,
+            opcode::PBKDF_PARAM_REQUEST,
+            true,
+            b"request",
+            at(0),
+            0,
+            &mut scratch,
+            &mut datagram,
+        )
+        .expect("send");
 
-    // The R flag is bit 2 of the Exchange Flags, the first octet of the protocol header. On an
-    // unsecured session the payload starts at octet 8: flags, session id, security flags,
-    // counter.
-    assert_eq!(datagram[8] & 0x04, 0, "no R flag over BLE");
+    // The R flag is bit 2 of the Exchange Flags, the first octet of the protocol header, which
+    // begins where the message header ends. That offset is not a constant: an unsecured
+    // initiator encloses §4.13.2.1's Ephemeral Initiator Node ID as a Source Node ID, so the
+    // header is eight octets longer than a bare one, and a hard-coded 8 reads the counter.
+    let (sent_header, _) =
+        matter_kit::msg::MessageHeader::decode(&datagram[..len]).expect("decode");
+    let protocol_header_at = sent_header.encoded_len();
+    assert_eq!(datagram[protocol_header_at] & 0x04, 0, "no R flag over BLE");
     // Asserted on MRP itself rather than on `wake_at`, which also reports when an abandoned
     // exchange could next be reclaimed (§4.10.5.3) and so is `Some` for any open exchange.
     assert!(

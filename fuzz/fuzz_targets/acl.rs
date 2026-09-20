@@ -35,9 +35,9 @@ use matter_kit::im::{ClusterHandler, InteractionContext, WriteOp};
 use matter_kit::msg::{FabricIndex, NodeId};
 use matter_kit::tlv::{Tag, TlvReader, TlvWriter};
 
-const ENTRIES: usize = DefaultConfig::ACL_ENTRIES;
-const SUBJECTS: usize = DefaultConfig::ACL_SUBJECTS;
-const TARGETS: usize = DefaultConfig::ACL_TARGETS;
+const ENTRIES: usize = 20;
+const SUBJECTS: usize = 4;
+const TARGETS: usize = 3;
 
 type FuzzAcl = Acl<DefaultConfig, ENTRIES, SUBJECTS, TARGETS>;
 

@@ -228,10 +228,10 @@ fn on_off_reports_the_state_it_was_started_in() {
 /// a privilege §9.10.5.2 never meant as an answer to "what may this subject do here".
 #[test]
 fn the_highest_privilege_follows_the_subsumption_chain_and_skips_proxy_view() {
+    use matter_kit::DefaultConfig;
     use matter_kit::acl::{Acl, AuthMode, Entry, SubjectDescriptor};
     use matter_kit::dm::{Endpoint, Node, Privilege};
     use matter_kit::msg::{FabricIndex, NodeId};
-    use matter_kit::{Config, DefaultConfig};
 
     const F1: FabricIndex = FabricIndex(1);
     const ADMIN: NodeId = NodeId(0x0000_0000_0001_0001);
@@ -239,7 +239,7 @@ fn the_highest_privilege_follows_the_subsumption_chain_and_skips_proxy_view() {
     let endpoints = [Endpoint::new(1, &clusters)];
     let node = Node::new(&endpoints);
 
-    let mut acl: Acl<DefaultConfig, { DefaultConfig::ACL_ENTRIES }, 4, 3> = Acl::new();
+    let mut acl: Acl<DefaultConfig, 20, 4, 3> = Acl::new();
     let subject = SubjectDescriptor::case(F1, ADMIN);
 
     // Nothing granted: no answer at all.
@@ -260,7 +260,7 @@ fn the_highest_privilege_follows_the_subsumption_chain_and_skips_proxy_view() {
     );
 
     // ProxyView alone: something was granted, and it is not an answer to "what may this do".
-    let mut proxy_only: Acl<DefaultConfig, { DefaultConfig::ACL_ENTRIES }, 4, 3> = Acl::new();
+    let mut proxy_only: Acl<DefaultConfig, 20, 4, 3> = Acl::new();
     let mut subjects = heapless::Vec::new();
     subjects.push(ADMIN).unwrap();
     proxy_only

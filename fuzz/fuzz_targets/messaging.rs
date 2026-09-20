@@ -35,8 +35,15 @@ use matter_kit::messaging::{Messaging, Received};
 use matter_kit::msg::{ProtocolId, SessionId};
 use matter_kit::platform::{Instant, PeerAddr};
 
-const SESSIONS: usize = 4;
-const EXCHANGES: usize = 8;
+/// The specification's own minimum for five fabrics — §4.14.2.8's three CASE sessions each —
+/// rather than a smaller table chosen to make exhaustion easy to reach.
+///
+/// It used to be four, and `SessionTable::CHECK` refuses that now: a node with four sessions is
+/// one no laboratory would certify, and exhaustion reached on a table no product has is not
+/// evidence about a product. The fuzzer does millions of iterations; it can afford eleven more
+/// sessions.
+const SESSIONS: usize = 15;
+const EXCHANGES: usize = 24;
 
 type Stack = Messaging<DefaultConfig, SESSIONS, EXCHANGES>;
 
@@ -120,8 +127,11 @@ fuzz_target!(|data: &[u8]| {
         drains += 1;
         assert!(drains < 10_000, "polling did not terminate");
     }
+    // `open_unsecured` rather than `open`: §4.13.2.1 requires an Unsecured Session Context before
+    // an initiator sends anything, and the two are established together so that neither can be
+    // forgotten. `open` on the unsecured session without one is `InvalidState` by design.
     let exchange = node
-        .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, recovered)
+        .open_unsecured(ProtocolId::SECURE_CHANNEL, recovered, 0x5A5A_1234_5678_9ABC)
         .expect("a node that cannot open an exchange can never establish another session");
     let mut out = [0u8; 512];
     let mut scratch = [0u8; 512];

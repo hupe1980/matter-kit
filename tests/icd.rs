@@ -17,14 +17,16 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use matter_kit::clusters::icd_management::{
     self, ClientType, Feature, IcdManagement, OperatingMode, Registration, Timings,
     UserActiveModeTrigger,
 };
-use matter_kit::config::DefaultConfig;
 use matter_kit::crypto::SymmetricKey;
 use matter_kit::dm::{ClusterDescriptor, Endpoint, Node, Privilege};
 use matter_kit::icd::checkin::{self, KEY_REFRESH_OFFSET};
@@ -35,7 +37,16 @@ use matter_kit::im::{
 use matter_kit::msg::{FabricIndex, NodeId};
 use matter_kit::tlv::{ContainerKind, Tag, TlvReader, TlvWriter};
 
-type Icd<'a> = IcdManagement<'a, DefaultConfig, 8>;
+/// A node that promises each fabric two Check-In registrations rather than §9.16.6.6's floor of
+/// one, so that these tests reach the per-fabric quota rather than the table's end. The quota is
+/// `Config`'s, and `IcdManagement::CHECK` refuses a table too small to keep it.
+struct TwoClients;
+impl matter_kit::Config for TwoClients {
+    const ICD_CLIENTS_PER_FABRIC: usize = 2;
+}
+
+// Five fabrics × two registrations each: `IcdManagement::CHECK` refuses less.
+type Icd<'a> = IcdManagement<'a, TwoClients, 10>;
 
 const FABRIC: FabricIndex = FabricIndex(1);
 const OTHER_FABRIC: FabricIndex = FabricIndex(2);
@@ -83,7 +94,7 @@ fn device<'a>() -> Device<'a> {
     let endpoints: &'static [Endpoint<'static>] = Box::leak(Box::new([Endpoint::new(0, clusters)]));
     Device {
         node: Node::new(endpoints),
-        icd: Icd::new(EVERYTHING, timings(), 2),
+        icd: Icd::new(EVERYTHING, timings()),
     }
 }
 
@@ -235,12 +246,12 @@ fn the_trigger_bitmap_matches_the_user_active_mode_trigger_table() {
 
     // And a device declaring one of those without an instruction is refused at build time,
     // because a client will display "press the button for N seconds" with no N.
-    let icd = Icd::new(EVERYTHING, timings(), 2);
+    let icd = Icd::new(EVERYTHING, timings());
     assert!(
         icd.with_trigger(UserActiveModeTrigger::RESET_BUTTON_SECONDS, "")
             .is_err()
     );
-    let icd = Icd::new(EVERYTHING, timings(), 2);
+    let icd = Icd::new(EVERYTHING, timings());
     icd.with_trigger(UserActiveModeTrigger::RESET_BUTTON, "")
         .expect("a trigger that needs no instruction");
 }
@@ -672,7 +683,7 @@ fn a_device_without_long_idle_time_support_will_not_pretend_to_have_it() {
     // §9.16.4.3: LITS "is supported if and only if the device is a Long Idle Time ICD". A SIT
     // device that let itself be switched to LIT would be telling clients to expect a polling
     // interval its radio never uses, and they would stop expecting it to answer.
-    let sit_only = Icd::new(Feature::CHECK_IN_PROTOCOL_SUPPORT, timings(), 2);
+    let sit_only = Icd::new(Feature::CHECK_IN_PROTOCOL_SUPPORT, timings());
     assert_eq!(sit_only.operating_mode(), OperatingMode::Sit);
     assert_eq!(
         sit_only.set_operating_mode(OperatingMode::Lit),
@@ -681,7 +692,7 @@ fn a_device_without_long_idle_time_support_will_not_pretend_to_have_it() {
 
     // §9.16.4.4: without DSLS, a device may not switch while a client is registered — the
     // registered client was promised the mode it saw.
-    let lit = Icd::new(EVERYTHING, timings(), 2);
+    let lit = Icd::new(EVERYTHING, timings());
     lit.set_operating_mode(OperatingMode::Lit)
         .expect("no clients yet");
     lit.set_operating_mode(OperatingMode::Sit)
@@ -693,7 +704,7 @@ fn the_counter_is_never_handed_out_twice() {
     // Reusing a Check-In Counter reuses the nonce it derives (§4.22.3.4), which costs the
     // confidentiality of both messages that share it. So reading and advancing are one
     // operation rather than two a caller could get out of order.
-    let icd = Icd::new(EVERYTHING, timings(), 2);
+    let icd = Icd::new(EVERYTHING, timings());
     icd.restore_counter(u32::MAX - 1);
     assert_eq!(icd.next_check_in_counter(), u32::MAX);
     assert_eq!(
@@ -716,7 +727,7 @@ fn a_factory_reset_randomizes_the_counter_into_the_specified_range() {
     // counter that rewinds past a registered client's starting value makes every later check-in
     // look like a replay, and the client stops waking for a device that is calling it.
     const CEILING: u32 = 1 << 28;
-    let icd = Icd::new(EVERYTHING, timings(), 2);
+    let icd = Icd::new(EVERYTHING, timings());
     assert_eq!(
         icd.counter(),
         0,

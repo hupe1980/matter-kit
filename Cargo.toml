@@ -8,7 +8,7 @@ exclude = ["fuzz", "interop"]
 
 [package]
 name = "matter-kit"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["hupe1980"]
 edition = "2024"
 rust-version = "1.88"
@@ -29,7 +29,7 @@ exclude = ["concepts/", "site/"]
 default = ["rustcrypto"]
 
 # Allocation: the growable collections a controller on a big machine wants. Not TCP —
-# `transport::tcp` is sized by `Config::MAX_TCP_MSG` like every other table here.
+# `transport::tcp::Framer<N>` is a fixed-capacity buffer like every other table here.
 alloc = []
 # The operating system: sockets, a file-backed key-value store, `std::error::Error`.
 #
@@ -71,8 +71,8 @@ log = ["dep:log"]
 defmt = ["dep:defmt", "heapless/defmt"]
 
 [dependencies]
-# Fixed-capacity collections. The whole crate is sized by `Config`, and these are
-# what a `Config` constant turns into: `heapless::Vec<T, N>` with `N` from the trait.
+# Fixed-capacity collections. Every table in the crate is one of these — `heapless::Vec<T, N>`
+# with `N` the table's own const parameter, asserted against the specification's minima.
 heapless = { version = "0.9", default-features = false }
 bitflags = { version = "2.5", default-features = false }
 log = { version = "0.4", default-features = false, optional = true }
@@ -266,3 +266,17 @@ indexing_slicing = "deny"
 arithmetic_side_effects = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+# The other half of "every number off the wire is hostile". `arithmetic_side_effects` above
+# catches an overflow; these catch the quieter one — an `as` that drops the high bits with no
+# word from the compiler. The manual pairing code accepted values §5.1.4.1.4 forbids for exactly
+# that reason: a five-digit group holds 99999, the field is sixteen bits, and the surplus fell
+# off a mask.
+#
+# Every deliberate cast carries `#[expect(…, reason = "…")]` naming the invariant that makes it
+# safe — `expect` rather than `allow`, so a rewrite that removes the cast turns the annotation
+# into a warning asking to be deleted, and no reason outlives the code it explains.
+cast_possible_truncation = "deny"
+cast_possible_wrap = "deny"
+cast_sign_loss = "deny"
+

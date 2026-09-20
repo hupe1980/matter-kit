@@ -14,7 +14,10 @@
     clippy::expect_used,
     clippy::indexing_slicing,
     clippy::panic,
-    clippy::arithmetic_side_effects
+    clippy::arithmetic_side_effects,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use matter_kit::ErrorCode;
@@ -280,13 +283,13 @@ fn only_tcp_carries_a_large_message() {
 mod over_a_stream {
     use matter_kit::config::DefaultConfig;
     use matter_kit::messaging::Messaging;
-    use matter_kit::msg::{ProtocolId, SessionId};
+    use matter_kit::msg::ProtocolId;
     use matter_kit::platform::{Instant, Peer};
     use matter_kit::transport::tcp::{self, Framed, Framer};
 
     use super::{ADDR, LENGTH_PREFIX};
 
-    type Stack = Messaging<DefaultConfig, 4, 8>;
+    type Stack = Messaging<DefaultConfig>;
 
     const CONNECTION: Peer = Peer::Tcp(ADDR, 0x0042);
     /// Larger than §4.4.4's datagram limit, and larger than the old fixed framing buffer.
@@ -300,11 +303,11 @@ mod over_a_stream {
     fn a_four_kilobyte_message_frames_and_reassembles() {
         let mut node = Stack::new(0x3000, 0x200, 7);
         let exchange = node
-            .open_to(
-                SessionId::UNSECURED,
+            .open_unsecured_to(
                 ProtocolId::SECURE_CHANNEL,
                 CONNECTION,
                 at(0),
+                0xC0DE_0011_2233_4455,
             )
             .expect("open");
 
@@ -326,9 +329,17 @@ mod over_a_stream {
         assert!(len > 1280, "the whole payload is in the message");
 
         // §4.12.4: no MRP on a stream, even though `reliable` was asked for. The R flag is bit
-        // 2 of the Exchange Flags, the first octet of the protocol header, which on an
-        // unsecured session starts at octet 8.
-        assert_eq!(datagram[8] & 0x04, 0, "no R flag over TCP");
+        // 2 of the Exchange Flags, the first octet of the protocol header — which begins where
+        // the message header ends, and that is not a constant: an unsecured initiator encloses
+        // §4.13.2.1's Ephemeral Initiator Node ID as a Source Node ID, so the header is eight
+        // octets longer than a bare one.
+        let (sent_header, _) =
+            matter_kit::msg::MessageHeader::decode(&datagram[..len]).expect("decode");
+        assert_eq!(
+            datagram[sent_header.encoded_len()] & 0x04,
+            0,
+            "no R flag over TCP"
+        );
         // On MRP itself, not on `wake_at`: that also reports when an abandoned exchange could
         // next be reclaimed (§4.10.5.3), so it is `Some` for any open exchange.
         assert!(
@@ -368,11 +379,11 @@ mod over_a_stream {
         // the integrity check with nothing to say why.
         let mut node = Stack::new(0x3000, 0x200, 7);
         let exchange = node
-            .open_to(
-                SessionId::UNSECURED,
+            .open_unsecured_to(
                 ProtocolId::SECURE_CHANNEL,
                 CONNECTION,
                 at(0),
+                0xC0DE_0011_2233_4455,
             )
             .expect("open");
         let payload = [0u8; PAYLOAD];

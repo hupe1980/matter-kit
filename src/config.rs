@@ -1,88 +1,76 @@
-//! How big everything is.
+//! What the node promises, and how its promises are checked.
 //!
-//! A Matter node is a set of tables: fabrics it belongs to, sessions it holds, exchanges
-//! in flight, subscriptions it serves, access-control entries it enforces. On a
-//! microcontroller every one of those is a fixed-capacity array, and its length has to be
-//! known at compile time.
+//! A Matter node is a set of tables: fabrics it belongs to, sessions it holds, exchanges in
+//! flight, subscriptions it serves, access-control entries it enforces. On a microcontroller
+//! every one of those is a fixed-capacity array whose length has to be known at compile time.
 //!
-//! The obvious way to express that is Cargo features — `fabrics-5`, `fabrics-32`,
-//! `sessions-16` — which is what the other Rust implementation does, with seventy-odd of
-//! them. It has two problems. Cargo features are *additive and global*: two crates in one
-//! binary that want different sizes silently get the union, and there is no way to say so.
-//! And nothing checks the result against the specification, so a build that cannot pass
-//! certification compiles happily.
+//! The obvious way to express that is Cargo features — `fabrics-5`, `sessions-16` — which is
+//! what the other Rust implementation does, with seventy-odd of them. Cargo features are
+//! *additive and global*: two crates in one binary that want different sizes silently get the
+//! union, and nothing checks the result against the specification.
 //!
-//! So sizing is a **trait**. A consumer writes one type, the numbers travel with it
-//! through every generic in the crate, and the specification's minima are `const`
-//! assertions that fail the build rather than the certification laboratory.
+//! # Capacity is declared once, on the table
 //!
-//! **Every constant here is read by the crate.** A sizing knob nothing reads is worse than
-//! no knob at all: it reads as a promise, it can carry an assertion that looks like
-//! enforcement, and the table it claims to size is whatever length somebody else picked. So
-//! `Config` carries what the protocol core allocates — fabrics, sessions, exchanges,
-//! subscriptions, access control — and no more. Capacities that belong to one instance of one
-//! table are const parameters on that table (`GroupKeys<K, M>`, `SceneTable<N, EFS, F>`,
-//! `Binding<C, N>`), chosen where it is constructed, because that is where the device knows
-//! how many it wants. `GROUPS` and `GROUP_KEYS` stay because §2.11.1.2's per-fabric minima
-//! are checked against them and a device passes them straight to those tables.
+//! Stable Rust cannot write `Vec<T, { C::SESSIONS }>`: an associated const may not appear in
+//! const-generic position. So a table's capacity **is** its own const parameter —
+//! `SessionTable<C, N>`, `Acl<C, N, S, T>` — and there is no second place that also claims to
+//! be it. A trait constant that names a capacity it cannot size is worse than no constant at
+//! all: it reads as a promise, it can carry an assertion that looks like enforcement, and the
+//! table it claims to size is whatever length somebody else picked.
+//!
+//! What a table's capacity cannot tell you is what share of it each *fabric* is owed. That is a
+//! policy, it is what the node advertises on the wire, and it is what this trait carries:
+//!
+//! | Constant | What it is | Section |
+//! |---|---|---|
+//! | [`FABRICS`](Config::FABRICS) | how many ecosystems the node can join — `SupportedFabrics` | §11.18.5.3 |
+//! | [`SUBSCRIPTIONS_PER_FABRIC`](Config::SUBSCRIPTIONS_PER_FABRIC) | `SubscriptionsPerFabric` | §2.11.2.2 |
+//! | [`ACL_ENTRIES_PER_FABRIC`](Config::ACL_ENTRIES_PER_FABRIC) | `AccessControlEntriesPerFabric` | §2.11.1.1, §9.10.6.7 |
+//! | [`GROUPS_PER_FABRIC`](Config::GROUPS_PER_FABRIC) | `MaxGroupsPerFabric` | §2.11.1.2, §11.2.6.2 |
+//! | [`GROUP_KEYS_PER_FABRIC`](Config::GROUP_KEYS_PER_FABRIC) | `MaxGroupKeysPerFabric` | §2.11.1.2, §11.2.6.3 |
+//! | [`READ_PATHS`](Config::READ_PATHS) | `ReadPathsSupported` | §2.11.2.1, §11.1.4.4 |
+//! | [`ICD_CLIENTS_PER_FABRIC`](Config::ICD_CLIENTS_PER_FABRIC) | `ClientsSupportedPerFabric` | §9.16.6.6 |
+//! | [`ACL_AUXILIARY`](Config::ACL_AUXILIARY) | whether §9.10.4.3's Auxiliary feature is served | §6.6.6.2 |
+//!
+//! Every one of those is read by the crate through `C::`, and every assertion in
+//! [`AssertValid`] constrains a number something reads.
+//!
+//! # Who checks that a table can keep the promise
+//!
+//! The table does, at compile time, against the `Config` it is parameterised by. A
+//! `SubscriptionTable<C, N, P>` will not compile unless `N` can hold
+//! `FABRICS × SUBSCRIPTIONS_PER_FABRIC`; an `Acl<C, N, S, T>` will not compile unless `N` can
+//! hold `FABRICS × ACL_ENTRIES_PER_FABRIC`, `S` is at least §9.10.6.5's four and `T` at least
+//! §9.10.6.6's three. The failing rule is named in the build error.
+//!
+//! That is the whole mechanism, and it is why §11.1.4.4's `CapabilityMinima` is built from the
+//! tables rather than from this trait: the specification says each field "SHALL indicate the
+//! **actual**" number, and only the table knows it.
 //!
 //! ```
 //! use matter_kit::Config;
 //!
-//! /// A Thread light: one ecosystem plus room for a second, and not much else.
+//! /// A Thread light: room for five ecosystems, and the specification's minimum of everything.
 //! struct Light;
-//! impl Config for Light {
-//!     const FABRICS: usize = 5;
-//!     const SESSIONS: usize = 16;
-//!     const SUBSCRIPTIONS: usize = 15;
-//! }
+//! impl Config for Light {}
 //! ```
 //!
-//! Everything not named takes the value in [`DefaultConfig`], which is a device-sized
-//! profile that satisfies every minimum.
-//!
-//! # What is checked
-//!
-//! | Constant | Rule | Section |
-//! |---|---|---|
-//! | `FABRICS` | 5 ..= 254 — the `SupportedFabrics` constraint | §11.18.5.3 |
-//! | `ACL_ENTRIES` | at least 4 per fabric | §2.11.1.1 |
-//! | `GROUP_KEYS` | at least 3 per fabric | §2.11.1.2 |
-//! | `SESSIONS` | at least 3 CASE sessions per fabric | §4.14.2.8 |
-//! | `SUBSCRIPTIONS` | at least 3 per fabric | §2.11.2.2 |
-//! | `SUB_PATHS` | at least 3 per subscription | §2.11.2.2 |
-//! | `READ_PATHS` | at least 9 | §2.11.2.1 |
-//! | `EXCHANGES_PER_SESSION` | at least 1 | — |
-//!
-//! The assertions are in [`assert_valid`], which every generic entry point in the crate
-//! instantiates. A `Config` that breaks a rule therefore fails to compile at the first
-//! place it is used, with the failing rule named in the panic message.
+//! Everything not named takes the value in [`DefaultConfig`].
 
-/// The sizes a Matter node is built to.
+/// What a Matter node promises each fabric, and which optional behaviours it serves.
 ///
-/// Implement this on a zero-sized type and pass it as the `C` parameter. Every constant
-/// has a default from [`DefaultConfig`], so a minimal implementation is `impl Config for
-/// MyNode {}`.
+/// Implement this on a zero-sized type and pass it as the `C` parameter. Every constant has a
+/// default that is the specification's own minimum, so `impl Config for MyNode {}` is a
+/// complete and conformant implementation.
+///
+/// It does **not** size anything: see the module documentation.
 pub trait Config {
     /// How many fabrics — commissioned ecosystems — the node can belong to.
     ///
-    /// Reported as `SupportedFabrics` (Core §11.18.5.3), whose constraint is `5 to 254`:
-    /// a node that supports fewer than five cannot be commissioned into the number of
-    /// ecosystems the specification requires.
+    /// Reported as `SupportedFabrics` (Core §11.18.5.3), whose constraint is `5 to 254`: a node
+    /// that supports fewer than five cannot be commissioned into the number of ecosystems the
+    /// specification requires. The fabric table is asserted at compile time to hold this many.
     const FABRICS: usize = 5;
-
-    /// How many secure sessions can exist at once, across all fabrics.
-    ///
-    /// Core §4.14.2.8: "A node SHALL support at least 3 CASE session contexts per fabric."
-    const SESSIONS: usize = 16;
-
-    /// How many exchanges can be open on one session at once.
-    const EXCHANGES_PER_SESSION: usize = 4;
-
-    /// How many subscriptions the node can serve, across all fabrics.
-    ///
-    /// Core §2.11.2.2: at least three per fabric.
-    const SUBSCRIPTIONS: usize = 15;
 
     /// How many subscriptions any one fabric may hold.
     ///
@@ -93,76 +81,60 @@ pub trait Config {
     /// afterwards is told the node is out of resources by a node that is, from its own point
     /// of view, working perfectly.
     ///
-    /// So the guarantee is kept the way [`Config::ACL_ENTRIES_PER_FABRIC`] keeps §6.6's: a
-    /// fixed share each, refusing a fabric that is at its quota even when the table has room.
-    /// That is the strict reading, it is always conformant, and it cannot surprise an
-    /// administrator by granting a subscription one day and refusing it the next when what
-    /// changed was somebody else's fabric.
+    /// So the guarantee is a fixed share each, refusing a fabric that is at its quota even when
+    /// the table has room. That is the strict reading, it is always conformant, and it cannot
+    /// surprise an administrator by granting a subscription one day and refusing it the next
+    /// when what changed was somebody else's fabric.
     const SUBSCRIPTIONS_PER_FABRIC: usize = 3;
-
-    /// How many attribute or event paths one subscription can carry.
-    ///
-    /// Core §2.11.2.2: at least three.
-    const SUB_PATHS: usize = 3;
-
-    /// How many paths one read interaction can carry.
-    ///
-    /// Core §2.11.2.1: "a single Read Interaction from a client on that fabric containing
-    /// up to 9 paths".
-    const READ_PATHS: usize = 9;
-
-    /// How many access-control entries the node stores, across all fabrics.
-    ///
-    /// Core §2.11.1.1: "at least four Access Control Entries available for every fabric".
-    const ACL_ENTRIES: usize = 4 * Self::FABRICS;
 
     /// How many access-control entries **one fabric** may hold — §9.10.6.7's
     /// `AccessControlEntriesPerFabric`, constrained to `4 to 65534`.
     ///
-    /// A per-fabric quota, not just a total: §2.11.1.1 requires "at least four Access Control
-    /// Entries available for every fabric supported by the node", and without a quota the
-    /// first fabric to fill the table would lock every later administrator out of granting
-    /// itself anything.
+    /// §2.11.1.1 requires "at least four Access Control Entries available for every fabric
+    /// supported by the node", and without a quota the first fabric to fill the table would
+    /// lock every later administrator out of granting itself anything.
     ///
     /// §2.11.1.1 permits over-subscription — "if it supports N entries must enforce that any K
     /// fabrics together do not use more than N - 4*(5-K) entries" — which would let one fabric
     /// borrow the unused quota of another. This is the strict reading instead: a fixed share
-    /// each. It is always conformant and it cannot surprise an administrator by granting a
-    /// quota one day and refusing it the next, when what changed was another fabric.
+    /// each, for the same reason as [`SUBSCRIPTIONS_PER_FABRIC`](Config::SUBSCRIPTIONS_PER_FABRIC).
     const ACL_ENTRIES_PER_FABRIC: usize = 4;
 
-    /// How many subjects one access-control entry can name.
+    /// How many group memberships one fabric may hold — §11.2.6.2's `MaxGroupsPerFabric`.
     ///
-    /// §9.10.6.5's `SubjectsPerAccessControlEntry`, constrained to `4 to 65534`.
-    const ACL_SUBJECTS: usize = 4;
+    /// Core §2.11.1.2: "at least four groups per fabric".
+    const GROUPS_PER_FABRIC: usize = 4;
 
-    /// How many targets one access-control entry can name.
+    /// How many group key sets one fabric may hold — §11.2.6.3's `MaxGroupKeysPerFabric`.
     ///
-    /// §9.10.6.6's `TargetsPerAccessControlEntry`, constrained to `3 to 65534`.
-    const ACL_TARGETS: usize = 3;
+    /// Core §2.11.1.2: "at least three group keys per fabric".
+    const GROUP_KEYS_PER_FABRIC: usize = 3;
+
+    /// How many paths one Read Request is guaranteed to be answered with.
+    ///
+    /// §11.1.4.4's `ReadPathsSupported`, constrained to `9 to 10000`: "the actual maximum
+    /// number of read paths … which a node guarantees being able to process in any Read Request
+    /// Action". Core §2.11.2.1 sets the floor: "a single Read Interaction from a client on that
+    /// fabric containing up to 9 paths".
+    ///
+    /// Unlike every other constant here this one is a promise about *work* rather than about
+    /// storage, so no table can check it. `tests/im_read_server.rs` does, by reading that many
+    /// paths in one action and requiring an answer.
+    const READ_PATHS: usize = 9;
+
+    /// How many Check-In registrations one fabric may hold — §9.16.6.6's
+    /// `ClientsSupportedPerFabric`, constrained to `min 1`.
+    ///
+    /// §9.16.6.5: "The maximum number of entries that can be in the list SHALL be
+    /// ClientsSupportedPerFabric for each fabric", so this is a per-fabric guarantee like the
+    /// others and the registration table is checked against it at compile time.
+    const ICD_CLIENTS_PER_FABRIC: usize = 1;
 
     /// Whether §9.10.4.3's Auxiliary feature is implemented.
     ///
     /// It changes an access decision: with it, §6.6.6.2 stops a wildcard Group entry from
     /// reaching endpoint 0, whose clusters administer the node itself.
     const ACL_AUXILIARY: bool = false;
-
-    /// How many group memberships the node keeps, across all fabrics.
-    const GROUPS: usize = 4 * Self::FABRICS;
-
-    /// How many group key sets the node keeps, across all fabrics.
-    ///
-    /// Core §2.11.1.2: "at least three group keys per fabric".
-    const GROUP_KEYS: usize = 3 * Self::FABRICS;
-
-    /// The largest message the node will accept over a stream transport.
-    ///
-    /// Core §4.15.2.3 calls this the "Maximum Message Size", and a peer that announces a
-    /// larger one gets `MESSAGE_TOO_LARGE` and a closed connection. It is the `N` of
-    /// [`tcp::Framer`](crate::transport::tcp::Framer), and the specification sets no figure:
-    /// "The system platform MAY configure a Maximum Message Size for the payload that it is
-    /// capable of receiving", so a device that cannot spare 64 KiB says so here.
-    const MAX_TCP_MSG: usize = 64 * 1024;
 }
 
 /// A device-sized profile that satisfies every minimum: five fabrics, sixteen sessions,
@@ -202,10 +174,13 @@ pub const MAX_MESSAGE_FRAMING: usize = (8 + 8 + 8) + (6 + 2 + 4) + 16;
 /// makes "it fits" independent of which of those happens to be true.
 pub const MAX_UDP_PAYLOAD: usize = MAX_UDP_MESSAGE.saturating_sub(MAX_MESSAGE_FRAMING);
 
-/// Compile-time proof that a [`Config`] satisfies the specification's minima.
+/// Compile-time proof that a [`Config`] is internally conformant.
 ///
-/// Instantiating this type evaluates its assertions; every generic entry point in the
-/// crate does so, which is what makes a bad `Config` a build failure at its first use.
+/// Instantiating this type evaluates its assertions; every generic entry point in the crate
+/// does so, which is what makes a bad `Config` a build failure at its first use.
+///
+/// It checks the *policy* only. Whether a table is big enough to keep that policy is checked by
+/// the table — see [`Capacity`].
 pub struct AssertValid<C: Config>(core::marker::PhantomData<C>);
 
 impl<C: Config> AssertValid<C> {
@@ -220,42 +195,63 @@ impl<C: Config> AssertValid<C> {
             "Config::FABRICS: Core §11.18.5.3 constrains SupportedFabrics to 5..=254"
         );
         assert!(
-            C::ACL_ENTRIES >= 4 * C::FABRICS,
-            "Config::ACL_ENTRIES: Core §2.11.1.1 requires at least 4 entries per fabric"
-        );
-        assert!(
-            C::GROUP_KEYS >= 3 * C::FABRICS,
-            "Config::GROUP_KEYS: Core §2.11.1.2 requires at least 3 group keys per fabric"
-        );
-        assert!(
-            C::SESSIONS >= 3 * C::FABRICS,
-            "Config::SESSIONS: Core §4.14.2.8 requires at least 3 CASE sessions per fabric"
-        );
-        assert!(
             C::SUBSCRIPTIONS_PER_FABRIC >= 3,
             "Config::SUBSCRIPTIONS_PER_FABRIC: Core §2.11.2.2 requires at least 3 per fabric"
         );
         assert!(
-            C::SUBSCRIPTIONS >= C::SUBSCRIPTIONS_PER_FABRIC * C::FABRICS,
-            "Config::SUBSCRIPTIONS: every fabric must be able to reach SUBSCRIPTIONS_PER_FABRIC"
+            C::ACL_ENTRIES_PER_FABRIC >= 4,
+            "Config::ACL_ENTRIES_PER_FABRIC: Core §2.11.1.1 requires at least 4 per fabric"
         );
         assert!(
-            C::SUBSCRIPTIONS >= 3 * C::FABRICS,
-            "Config::SUBSCRIPTIONS: Core §2.11.2.2 requires at least 3 subscriptions per fabric"
+            C::GROUPS_PER_FABRIC >= 4,
+            "Config::GROUPS_PER_FABRIC: Core §2.11.1.2 requires at least 4 groups per fabric"
         );
         assert!(
-            C::SUB_PATHS >= 3,
-            "Config::SUB_PATHS: Core §2.11.2.2 requires at least 3 paths per subscription"
+            C::GROUP_KEYS_PER_FABRIC >= 3,
+            "Config::GROUP_KEYS_PER_FABRIC: Core §2.11.1.2 requires at least 3 group keys per fabric"
         );
         assert!(
             C::READ_PATHS >= 9,
             "Config::READ_PATHS: Core §2.11.2.1 requires a read of up to 9 paths"
         );
         assert!(
-            C::EXCHANGES_PER_SESSION >= 1,
-            "Config::EXCHANGES_PER_SESSION: a session with no exchange can do nothing"
+            C::ICD_CLIENTS_PER_FABRIC >= 1,
+            "Config::ICD_CLIENTS_PER_FABRIC: §9.16.6.6 constrains ClientsSupportedPerFabric to min 1"
         );
     };
+}
+
+/// A table whose capacity the node states on the wire.
+///
+/// §11.1.4.4 requires `CapabilityMinima` to report "the **actual**" number a node supports, and
+/// §11.18.5.3, §9.10.6.7, §11.2.6.2 and §11.2.6.3 do the same for their clusters. Only the table
+/// knows that number, so the table is what publishes it — never [`Config`], which cannot size
+/// anything, and never a value the integrator types beside it.
+///
+/// Implemented by [`FabricTable`](crate::fabric::FabricTable),
+/// [`SessionTable`](crate::session::SessionTable),
+/// [`SubscriptionTable`](crate::im::SubscriptionTable), [`Acl`](crate::acl::Acl) and
+/// [`GroupKeys`](crate::group::GroupKeys).
+pub trait Capacity {
+    /// Total slots, across every fabric.
+    const TOTAL: usize;
+
+    /// What one fabric is guaranteed — the number the specification calls "actual".
+    ///
+    /// A table with no per-fabric quota reports its total.
+    const PER_FABRIC: usize;
+}
+
+/// A subscription table, which has one more number the node states: how many paths one
+/// subscription may carry.
+///
+/// §11.1.4.4's `SubscribePathsSupported`, constrained to `3 to 10000`. It is separate from
+/// [`Capacity`] because it is the only table with an inner capacity the specification asks
+/// about, and a constant on `Capacity` that every other table answered zero to would be a
+/// number that means nothing four times over.
+pub trait SubscriptionCapacity: Capacity {
+    /// How many attribute or event paths one subscription can carry.
+    const PATHS: usize;
 }
 
 /// Runs [`AssertValid::CHECK`] for `C`.
@@ -282,18 +278,31 @@ mod tests {
     }
 
     #[test]
-    fn derived_defaults_follow_the_fabric_count() {
+    fn a_bigger_fabric_count_is_still_a_valid_policy() {
         #[derive(Debug)]
         struct Big;
         impl Config for Big {
             const FABRICS: usize = 16;
-            const SESSIONS: usize = 64;
-            const SUBSCRIPTIONS: usize = 48;
         }
         const _: () = assert_valid::<Big>();
-        // ACL_ENTRIES and GROUP_KEYS default off FABRICS, so they scale with it.
-        assert_eq!(Big::ACL_ENTRIES, 64);
-        assert_eq!(Big::GROUP_KEYS, 48);
+        // Nothing here scales with `FABRICS`, because nothing here is a capacity. What scales
+        // is the *requirement* each table is checked against: a `SessionTable<Big, 16>` now
+        // fails to build, because §4.14.2.8 wants 48 sessions for sixteen fabrics.
+        assert_eq!(Big::SUBSCRIPTIONS_PER_FABRIC, 3);
+        assert_eq!(Big::ACL_ENTRIES_PER_FABRIC, 4);
+    }
+
+    #[test]
+    fn the_defaults_are_the_specifications_own_minima() {
+        // A `Config` that names nothing is a conformant node and nothing more: every extra is a
+        // deliberate act, and `AssertValid` refuses anything below.
+        assert_eq!(DefaultConfig::FABRICS, 5);
+        assert_eq!(DefaultConfig::SUBSCRIPTIONS_PER_FABRIC, 3);
+        assert_eq!(DefaultConfig::ACL_ENTRIES_PER_FABRIC, 4);
+        assert_eq!(DefaultConfig::GROUPS_PER_FABRIC, 4);
+        assert_eq!(DefaultConfig::GROUP_KEYS_PER_FABRIC, 3);
+        assert_eq!(DefaultConfig::READ_PATHS, 9);
+        const { assert!(!<DefaultConfig as Config>::ACL_AUXILIARY) };
     }
 
     #[test]

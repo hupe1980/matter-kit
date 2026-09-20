@@ -61,6 +61,24 @@ if [ "${1:-}" = "--top" ]; then
   "$NM" --print-size --size-sort --radix=d "$IMAGE" | tail -n "${2:-15}"
 fi
 
+# What `cargo xtask stats` reads, so that the figure in the README is the figure this run
+# produced rather than one somebody typed next to it. Written before the budget check, because a
+# run that *failed* its budget is still the truth about this tree — and a stale number that
+# happens to pass is worse than a fresh one that does not.
+cat > "$(dirname "$0")/last.json" <<JSON
+{
+  "comment": "Written by footprint/run.sh. Not committed: it describes one machine's build.",
+  "flash_bytes": $flash,
+  "ram_bytes": $ram,
+  "flash_kib": $((flash / 1024)),
+  "ram_kib": $((ram / 1024)),
+  "text_bytes": $text,
+  "rodata_bytes": $rodata,
+  "data_bytes": $data,
+  "bss_bytes": $bss
+}
+JSON
+
 status=0
 if [ "$flash" -gt "$FLASH_BUDGET" ]; then
   echo "FAIL: flash $flash exceeds the budget of $FLASH_BUDGET" >&2

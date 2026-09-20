@@ -50,8 +50,14 @@ pub enum Conformance {
     Mandatory,
     /// `O` — the element MAY be present.
     Optional,
-    /// `P` — provisional (Core §2.13). Not certifiable, and may change in a 1.6.x revision,
-    /// so this crate treats it as optional but gates it behind the `provisional` feature.
+    /// `P` — provisional. Not certifiable, and may change in a dot revision.
+    ///
+    /// Three lists say what is provisional: Core §2.13, and the Application Cluster and Device
+    /// Library specifications' own. A device *may* serve one, so this behaves as
+    /// [`Optional`](Conformance::Optional) when the `provisional` feature is on — and
+    /// [`Cluster::validate`](crate::dm::spec::Cluster::validate) reports
+    /// [`Defect::Provisional`](crate::dm::spec::Defect::Provisional) when it is not, because a
+    /// certifiable build is the default build.
     Provisional,
     /// `D` — deprecated. Present for compatibility with an earlier revision, and not to be
     /// implemented in anything new.

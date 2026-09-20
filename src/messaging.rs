@@ -225,9 +225,11 @@ pub struct Evicted {
 
 /// A node's message processing: sessions, exchanges, and the framing between them.
 ///
-/// `S` is [`Config::SESSIONS`] and `X` is `SESSIONS * EXCHANGES_PER_SESSION`.
+/// `S` sizes the session table and `X` the exchange table. Both default to a device-sized
+/// node that satisfies every specification minimum for five fabrics, and
+/// [`SessionTable::CHECK`](crate::session::SessionTable::CHECK) refuses an `S` that cannot.
 #[derive(Debug)]
-pub struct Messaging<C: Config, const S: usize, const X: usize> {
+pub struct Messaging<C: Config, const S: usize = 16, const X: usize = 64> {
     sessions: SessionTable<C, S>,
     exchanges: ExchangeTable<C, X>,
     /// The counter for messages sent on the unsecured session (§4.6.1.2).
@@ -329,7 +331,33 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         Ok(())
     }
 
+    /// Opens an unsecured exchange as the initiator, establishing §4.13.2.1's Unsecured Session
+    /// Context in the same call.
+    ///
+    /// This is how a commissioner starts PASE, and how any node starts CASE: both handshakes
+    /// run on the unsecured session before there is a key. The context is not optional —
+    /// §4.13.2.1 has the initiator "enclose" its Ephemeral Initiator Node ID as the Source Node
+    /// ID of every message, and a message with neither a Source nor a Destination is one the
+    /// specification tells the responder to discard.
+    ///
+    /// `randomness` comes from the caller's [`Rng`](crate::platform::Rng) and becomes the
+    /// ephemeral id, which is a *new* one for each unsecured session by §4.13.2.1.
+    pub fn open_unsecured(
+        &mut self,
+        protocol: ProtocolId,
+        now: Instant,
+        randomness: u64,
+    ) -> Result<ExchangeKey> {
+        self.open_unsecured_as_initiator(crate::msg::NodeId::ephemeral(randomness))?;
+        let params = self.mrp_params(SessionId::UNSECURED);
+        self.exchanges
+            .open_initiator(SessionId::UNSECURED, protocol, params, None, now)
+    }
+
     /// Forgets the Unsecured Session Context, so the next handshake starts a new one.
+    ///
+    /// §4.13.2.1 requires a *new* ephemeral id per unsecured session, so a node that runs PASE
+    /// and then CASE against the same peer closes the first context before opening the second.
     pub const fn close_unsecured(&mut self) {
         self.unsecured_peer = None;
     }
@@ -361,7 +389,7 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
     /// (§4.11.1.1).
     ///
     /// A session table that answers `NoSpace` is a node that can be commissioned exactly
-    /// `Config::SESSIONS` times and then never again — and the failure appears at the
+    /// as many times as the session table is long and then never again — and the failure appears at the
     /// *next* administrator, not at the one who filled it. §4.11.1.1 is explicit about the
     /// alternative and about its three steps, in order:
     ///
@@ -481,6 +509,19 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         protocol: ProtocolId,
         now: Instant,
     ) -> Result<ExchangeKey> {
+        // §4.13.2.1 gives an unsecured initiator one obligation before it sends anything: an
+        // Unsecured Session Context, whose Ephemeral Initiator Node ID it "encloses as Source
+        // Node ID". Without one, [`Messaging::send`] has no id to put in the header and emits a
+        // message carrying neither a Source nor a Destination — which the specification tells
+        // the receiver to discard, and which the CHIP SDK does. The message is built, counted
+        // and dropped, and nothing anywhere says so.
+        //
+        // So an unsecured exchange is opened through [`Messaging::open_unsecured`], which
+        // establishes the context in the same call, and this door is closed rather than left
+        // to be remembered.
+        if session == SessionId::UNSECURED && self.unsecured_peer.is_none() {
+            bail!(InvalidState)
+        }
         let params = self.mrp_params(session);
         // Where the peer last was, which is the only answer available and the right one: a
         // session exists because that peer authenticated itself from there. Opening with no
@@ -505,9 +546,32 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         peer: Peer,
         now: Instant,
     ) -> Result<ExchangeKey> {
+        // The same obligation as [`Messaging::open`]: an unsecured initiator has to have
+        // §4.13.2.1's context before it sends, or its message carries no Source Node ID and the
+        // responder is told to discard it. [`Messaging::open_unsecured_to`] does both.
+        if session == SessionId::UNSECURED && self.unsecured_peer.is_none() {
+            bail!(InvalidState)
+        }
         let params = self.mrp_params(session);
         self.exchanges
             .open_initiator(session, protocol, params, Some(peer), now)
+    }
+
+    /// [`Messaging::open_unsecured`], to a peer whose address is already known.
+    ///
+    /// What a commissioner uses: it found the device over BLE or mDNS, so it has somewhere to
+    /// send before any session exists.
+    pub fn open_unsecured_to(
+        &mut self,
+        protocol: ProtocolId,
+        peer: Peer,
+        now: Instant,
+        randomness: u64,
+    ) -> Result<ExchangeKey> {
+        self.open_unsecured_as_initiator(crate::msg::NodeId::ephemeral(randomness))?;
+        let params = self.mrp_params(SessionId::UNSECURED);
+        self.exchanges
+            .open_initiator(SessionId::UNSECURED, protocol, params, Some(peer), now)
     }
 
     /// Where an exchange's peer is, once it is known.
@@ -603,6 +667,19 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         // Session Role to responder … Record the incoming message's Source Node ID as Ephemeral
         // Initiator Node ID." Recorded here, before the exchange is routed, so that the very
         // first reply carries it back as the Destination Node ID.
+        // §4.13.2.1 step 1c: "Else discard the message." A message that matches no context and
+        // carries no Source Node ID belongs to no session, and accepting it is what let this
+        // crate's own initiator get away with sending one — the two halves agreed with each
+        // other and disagreed with the specification.
+        if header.is_unsecured() && header.source.is_none() {
+            let addressed_to_our_context = matches!(
+                (self.unsecured_peer, header.destination),
+                (Some(peer), Destination::Node(id)) if peer.ephemeral_initiator == id
+            );
+            if !addressed_to_our_context {
+                bail!(NoSession)
+            }
+        }
         if header.is_unsecured()
             && let Some(source) = header.source
             && self
@@ -904,7 +981,7 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
         // encrypt them, and this is where they are joined. The buffer is the caller's
         // because its size is the *transport's*: a datagram node needs
         // [`MAX_UDP_MESSAGE`](crate::config::MAX_UDP_MESSAGE) and nothing more, and a node on
-        // TCP needs [`Config::MAX_TCP_MSG`](crate::Config::MAX_TCP_MSG) — which is the whole
+        // TCP needs the framer's own `N` — §4.15.2.3's Maximum Message Size, which is the whole
         // reason §4.15 exists and is far too much to put on the stack of every node that
         // never opens a connection.
         let header_len = protocol_header.encode(scratch)?;
@@ -1024,10 +1101,10 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::DefaultConfig;
+    use crate::config::{Capacity, DefaultConfig};
     use crate::exchange::Role;
 
-    type Node = Messaging<DefaultConfig, 4, 8>;
+    type Node = Messaging<DefaultConfig>;
 
     fn at(ms: u64) -> Instant {
         Instant::from_micros(ms.saturating_mul(1000))
@@ -1079,7 +1156,7 @@ mod tests {
         let mut body = [0u8; 16];
         let len = report.encode(&mut body).expect("encode");
         let exchange = attacker
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let (sent, _) = attacker
             .send(
@@ -1214,14 +1291,16 @@ mod tests {
 
     /// §4.11.1.1: a full session table evicts the least recently used session rather than
     /// refusing the handshake. Refusing it is a node that can be commissioned
-    /// `Config::SESSIONS` times and never again.
+    /// as many times as its session table is long, and never again.
     #[test]
     fn a_full_session_table_evicts_the_least_recently_used_session() {
-        // `S` is 4 for this alias, so the fifth session has to displace one.
+        // Filled from the table's own capacity, so the test stays about *fullness* rather than
+        // about a number that used to be the capacity.
+        const CAP: u16 = SessionTable::<DefaultConfig, 16>::TOTAL as u16;
         let mut node = Node::new(1, 100, 7);
         let mut scratch = [0u8; 512];
         let mut out = [0u8; 512];
-        for i in 0..4u16 {
+        for i in 0..CAP {
             let evicted = node
                 .install_session(
                     session_on(i + 1, 1, at(u64::from(i))),
@@ -1233,10 +1312,16 @@ mod tests {
                 .expect("install");
             assert!(evicted.is_none(), "there was room for session {i}");
         }
-        assert_eq!(node.sessions().len(), 4);
+        assert_eq!(node.sessions().len(), usize::from(CAP));
 
         let evicted = node
-            .install_session(session_on(9, 1, at(10)), at(10), 0, &mut scratch, &mut out)
+            .install_session(
+                session_on(CAP + 1, 1, at(u64::from(CAP) + 1)),
+                at(u64::from(CAP) + 1),
+                0,
+                &mut scratch,
+                &mut out,
+            )
             .expect("install")
             .expect("the table was full, so one had to go");
 
@@ -1247,8 +1332,8 @@ mod tests {
         assert!(evicted.len > 0, "the CloseSession report was framed");
         // Step 2b: and the session itself is gone, with the new one in its place.
         assert!(node.sessions().find(SessionId(1)).is_none());
-        assert!(node.sessions().find(SessionId(9)).is_some());
-        assert_eq!(node.sessions().len(), 4);
+        assert!(node.sessions().find(SessionId(CAP + 1)).is_some());
+        assert_eq!(node.sessions().len(), usize::from(CAP));
     }
 
     /// §4.13.3.1: closing a session removes "all state associated with" it, which includes
@@ -1305,7 +1390,7 @@ mod tests {
         let mut responder = Node::new(2, 200, 9);
 
         let key = initiator
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let mut wire = [0u8; 512];
         let mut scratch = [0u8; 512];
@@ -1376,7 +1461,7 @@ mod tests {
         let mut sender = Node::new(1, exchange_id, counter);
         sender.register(Protocols::SECURE_CHANNEL.with(Protocols::INTERACTION_MODEL));
         let key = sender
-            .open(SessionId::UNSECURED, protocol, at(0))
+            .open_unsecured(protocol, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let mut scratch = [0u8; 512];
         let (len, _) = sender
@@ -1394,8 +1479,9 @@ mod tests {
         let mut node = Node::new(2, 200, 9);
         let mut wire = [0u8; 512];
 
-        // Eight is this node's whole table.
-        for id in 0..8u16 {
+        // The whole table, from the table rather than from a literal.
+        const CAP: u16 = ExchangeTable::<DefaultConfig, 64>::TOTAL as u16;
+        for id in 0..CAP {
             let len = stranger_datagram(
                 id,
                 ProtocolId::SECURE_CHANNEL,
@@ -1405,11 +1491,15 @@ mod tests {
             );
             let _ = node.receive(&mut wire[..len], PEER, at(0));
         }
-        assert_eq!(node.exchanges().len(), 8, "the table is full");
+        assert_eq!(
+            node.exchanges().len(),
+            usize::from(CAP),
+            "the table is full"
+        );
 
         // A legitimate peer arrives while the attacker's entries are still fresh, and is
         // refused — which is correct, and is why the entries must not be permanent.
-        let len = stranger_datagram(900, ProtocolId::SECURE_CHANNEL, true, 900, &mut wire);
+        let len = stranger_datagram(CAP + 1, ProtocolId::SECURE_CHANNEL, true, 900, &mut wire);
         assert!(node.receive(&mut wire[..len], PEER, at(1)).is_err());
 
         // A minute later nothing has happened on any of them, so they go.
@@ -1433,9 +1523,10 @@ mod tests {
     /// that expired long ago.
     #[test]
     fn a_full_table_reclaims_before_refusing() {
+        const FULL: usize = ExchangeTable::<DefaultConfig, 64>::TOTAL;
         let mut node = Node::new(2, 200, 9);
         let mut wire = [0u8; 512];
-        for id in 0..8u16 {
+        for id in 0..FULL as u16 {
             let len = stranger_datagram(
                 id,
                 ProtocolId::SECURE_CHANNEL,
@@ -1445,10 +1536,16 @@ mod tests {
             );
             let _ = node.receive(&mut wire[..len], PEER, at(0));
         }
-        assert_eq!(node.exchanges().len(), 8);
+        assert_eq!(node.exchanges().len(), FULL);
 
         // No `poll` in between — the pressure itself is the trigger.
-        let len = stranger_datagram(900, ProtocolId::SECURE_CHANNEL, true, 900, &mut wire);
+        let len = stranger_datagram(
+            FULL as u16 + 1,
+            ProtocolId::SECURE_CHANNEL,
+            true,
+            900,
+            &mut wire,
+        );
         assert!(
             node.receive(&mut wire[..len], PEER, at(61_000)).is_ok(),
             "the entry that would have refused this one had been idle for a minute"
@@ -1509,7 +1606,7 @@ mod tests {
     fn an_exchange_with_a_pending_retransmission_is_never_reaped() {
         let mut node = Node::new(1, 100, 7);
         let key = node
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let mut wire = [0u8; 512];
         let mut scratch = [0u8; 512];
@@ -1549,6 +1646,7 @@ mod tests {
             .expect("an operational node id");
         let mut responder = Node::new(2, 200, 9);
 
+        // `open` rather than `open_unsecured`, because the context is the one this test named.
         let key = initiator
             .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
             .expect("open");
@@ -1695,7 +1793,7 @@ mod tests {
         let mut initiator = Node::new(1, 100, 7);
         let mut responder = Node::new(2, 200, 9);
         let key = initiator
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
 
         let mut wire = [0u8; 512];
@@ -1744,7 +1842,7 @@ mod tests {
         let mut initiator = Node::new(1, 100, 7);
         let mut responder = Node::new(2, 200, 9);
         let key = initiator
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let mut wire = [0u8; 512];
         let mut scratch = [0u8; 512];
@@ -1761,7 +1859,12 @@ mod tests {
             )
             .expect("send");
         // Clear the I flag in the protocol header: now it claims to be a *response*.
-        let header_len = MessageHeader::default().encoded_len();
+        //
+        // The offset is the *message* header's real length, which is not a constant: an
+        // unsecured initiator encloses its Ephemeral Initiator Node ID (§4.13.2.1), so the
+        // header is eight octets longer than a bare one. Decoding it is the only way to know.
+        let (sent_header, _) = MessageHeader::decode(&wire[..len]).expect("decode");
+        let header_len = sent_header.encoded_len();
         wire[header_len] &= !0x01;
 
         let err = responder
@@ -1775,7 +1878,7 @@ mod tests {
     fn an_unacknowledged_message_is_retransmitted_with_its_own_counter() {
         let mut initiator = Node::new(1, 100, 7);
         let key = initiator
-            .open(SessionId::UNSECURED, ProtocolId::SECURE_CHANNEL, at(0))
+            .open_unsecured(ProtocolId::SECURE_CHANNEL, at(0), 0xE0E0_1234_5678_9ABC)
             .expect("open");
         let mut wire = [0u8; 512];
         let mut scratch = [0u8; 512];

@@ -123,7 +123,13 @@ pub struct Cluster {
 }
 
 /// Something a device's configuration got wrong.
+///
+/// `#[non_exhaustive]` because the list has grown twice — `ResponseAccepted` and then
+/// `Provisional`, each because a rule turned out not to be checked anywhere — and a `match` in
+/// an integrator's build should not break the next time the specification gives this crate a
+/// reason to notice something new.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Defect {
     /// A mandatory element the device does not serve.
     Missing(Element),
@@ -140,6 +146,14 @@ pub enum Defect {
     },
     /// A response command in the accepted list, which is a command the server sends.
     ResponseAccepted(CommandId),
+    /// An element the specification marks provisional, on a build that did not ask for them.
+    ///
+    /// Core §2.13 — and the Application Cluster and Device Library specifications' own lists —
+    /// mark a mechanism provisional when it is "not certifiable and may change". Serving one is
+    /// a deliberate act, and the `provisional` Cargo feature is where the deliberation goes; a
+    /// build without it that furnishes a `P` element is a node that cannot be certified for a
+    /// reason nobody chose.
+    Provisional(Element),
 }
 
 /// Which element a [`Defect`] is about.
@@ -234,7 +248,21 @@ impl Cluster {
     /// directions. The specification could not express the rule mechanically, so neither can
     /// this — and guessing would produce exactly the confident-and-wrong answer that makes a
     /// validator worth ignoring.
+    ///
+    /// A fifth is reported only on a build without the `provisional` feature: an element the
+    /// specification marks `P`, or a cluster one of the three provisional *lists* names
+    /// ([`PROVISIONAL_CLUSTERS`]).
     pub fn validate(&self, descriptor: &ClusterDescriptor<'_>, mut found: impl FnMut(Defect)) {
+        // A cluster the Application Cluster specification calls provisional in prose. The data
+        // model does not always mark its elements `P` — `content_control` and `temperature_alarm`
+        // carry no provisional conformance at all — so serving one would otherwise be a
+        // perfectly conformant way to build a node that cannot be certified.
+        #[cfg(not(feature = "provisional"))]
+        if PROVISIONAL_CLUSTERS.iter().any(|(id, _)| *id == self.id) {
+            for attribute in descriptor.attributes {
+                found(Defect::Provisional(Element::Attribute(attribute.id)));
+            }
+        }
         if descriptor.revision != self.revision {
             found(Defect::WrongRevision {
                 found: descriptor.revision,
@@ -310,10 +338,54 @@ impl Cluster {
     }
 }
 
+/// Clusters a specification calls provisional **in prose** rather than in its conformance column.
+///
+/// Core §2.13 is a list of mechanisms and the data model marks their elements `P`, so
+/// [`Conformance::Provisional`] carries them. The Application Cluster and Device Library
+/// specifications keep lists of their own, in a paragraph — and the model does not always mark
+/// what those paragraphs name. `content_control` and `temperature_alarm` come out of the
+/// generator with no provisional conformance at all, so without this table a default build could
+/// serve either and every check here would call it conformant.
+///
+/// Hand-written, because prose is, which puts it in the same class as the rest of the
+/// hand-written specification surface and under the same drift check. Each entry cites the
+/// sentence it comes from.
+pub const PROVISIONAL_CLUSTERS: &[(ClusterId, &str)] = &[
+    // App §1.1's list: "Support for Content Control Cluster is provisional."
+    (0x050F, "App §1.1 — Content Control"),
+    // "Support for the Temperature Alarm Cluster is provisional."
+    (0x0064, "App §1.1 — Temperature Alarm"),
+    // "Support for the Ambient Context Sensing Cluster is provisional." The model does mark this
+    // one, and it is here so that the list is the whole list rather than the part that was
+    // missing — a reader checking the paragraph against this table should find every line.
+    (0x0431, "App §1.1 — Ambient Context Sensing"),
+];
+
+/// What the prose lists name and a cluster id cannot express.
+///
+/// Two things, stated so that [`PROVISIONAL_CLUSTERS`] reads as partial rather than complete.
+/// Dishwasher Alarm's five provisional *alarm bits* are values inside a bitmap attribute rather
+/// than elements of a cluster, so no conformance verdict reaches them; the check belongs in that
+/// cluster's write path. The Device Library's two device types belong to
+/// [`DeviceType::validate`](crate::dm::device::DeviceType::validate).
+///
+/// App §1.1's other two — Level Control's `Frequency` and Microwave Oven Control's
+/// `PowerInWatts` — need nothing here: the data model marks both `P` itself.
+pub const PROVISIONAL_NOT_EXPRESSIBLE: &str =
+    "App §1.1: Dishwasher Alarm's five alarm bits; DL §1.1: two device types";
+
 fn check(verdict: Conformance, present: bool, element: Element, found: &mut impl FnMut(Defect)) {
     match verdict {
         Conformance::Mandatory if !present => found(Defect::Missing(element)),
         Conformance::Disallowed if present => found(Defect::Disallowed(element)),
+        // "Provisional means off" is the crate's ninth rule, and this is the only place it can
+        // be enforced rather than asserted. The `provisional` feature gates the modules whose
+        // *whole* subject is provisional — the Groupcast cluster — but most provisional elements
+        // sit inside a cluster that is otherwise certifiable, and for those the feature has
+        // nothing to gate. So the verdict does the work: a `P` element a device furnishes is a
+        // defect unless the build asked for provisional mechanisms.
+        #[cfg(not(feature = "provisional"))]
+        Conformance::Provisional if present => found(Defect::Provisional(element)),
         _ => {}
     }
 }
@@ -635,10 +707,13 @@ impl<const A: usize, const C: usize, const G: usize, const E: usize> Conforming<
 
 /// Whether an element with this verdict is served.
 ///
-/// `Provisional` and `Deprecated` are treated as optional: neither is forbidden, and both are
-/// a decision the product makes rather than one the conformance makes for it. `Described` is
-/// *not* selected — the specification could not express the rule, so a device that needs the
-/// element names it in [`Optional`] and takes responsibility for reading the prose.
+/// `Provisional` and `Deprecated` are treated as optional *here*: neither is forbidden, and both
+/// are a decision the product makes rather than one the conformance makes for it. Whether the
+/// product was allowed to make that decision is [`check`]'s question, not this one — a `P`
+/// element furnished by a build without the `provisional` feature is a [`Defect::Provisional`].
+/// `Described` is *not* selected — the specification could not express the rule, so a device
+/// that needs the element names it in [`Optional`] and takes responsibility for reading the
+/// prose.
 const fn selected(verdict: Conformance, chosen: bool) -> bool {
     match verdict {
         Conformance::Mandatory => true,

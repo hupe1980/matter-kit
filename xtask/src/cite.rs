@@ -403,6 +403,23 @@ pub fn sweep(root: &Path, spec: &Path, cache_dir: &Path) -> Result<Report, Strin
     Ok(report)
 }
 
+/// Records the sweep's size where `stats` can read it.
+///
+/// The specification documents are not redistributable, so no CI job can run this sweep and
+/// no CI job can therefore measure these two numbers. `stats` reports them as unmeasured
+/// there and leaves the documents alone; this is the one place they can be produced.
+pub fn write_counts(root: &Path, report: &Report) {
+    let path = root.join("concepts/cite-last.json");
+    if !path.parent().is_some_and(Path::exists) {
+        return;
+    }
+    let json = format!(
+        "{{\n  \"citations\": {},\n  \"quotations\": {}\n}}\n",
+        report.citations, report.quoted
+    );
+    let _ = std::fs::write(path, json);
+}
+
 /// Prints what the sweep found.
 pub fn print(report: &Report) {
     println!(

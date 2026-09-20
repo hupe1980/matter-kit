@@ -191,7 +191,7 @@ impl<const N: usize> DirtySet<N> {
 ///
 /// Small on purpose: a device with a hundred subscribed attributes that all change at once is
 /// better served by one full report than by a hundred entries, and the fixed cost per
-/// subscription is what makes [`Config::SUBSCRIPTIONS`] affordable.
+/// subscription is what makes a table of them affordable.
 pub const DIRTY_PATHS: usize = 8;
 
 /// One active subscription (§8.5).
@@ -534,16 +534,57 @@ fn intersect_cluster(
 
 /// The publisher's set of active subscriptions.
 ///
-/// Fixed capacity from [`Config::SUBSCRIPTIONS`], whose compile-time assert holds it to
+/// Fixed capacity from `N`, which [`SubscriptionTable::CHECK`] holds to
 /// §2.11.2.2's "at least three Subscribe Interactions" per fabric.
 #[derive(Debug)]
-pub struct SubscriptionTable<C: Config, const N: usize, const P: usize> {
+pub struct SubscriptionTable<C: Config, const N: usize = 15, const P: usize = 3> {
     subscriptions: Vec<Subscription<P>, N>,
     /// The last id handed out. Ids are monotonic for the same reason fabric indices are: a
     /// subscriber caches one, and reusing it points a stale reference at somebody else's
     /// subscription.
     last_id: u32,
     _config: core::marker::PhantomData<C>,
+}
+
+impl<C: Config, const N: usize, const P: usize> crate::config::Capacity
+    for SubscriptionTable<C, N, P>
+{
+    const TOTAL: usize = N;
+    /// §11.1.4.4's `SubscriptionsPerFabric`: the fixed share each fabric is promised.
+    ///
+    /// The policy figure rather than `N / FABRICS`, because the share is what
+    /// `SubscriptionTable::admit` enforces — and [`SubscriptionTable::CHECK`] is what makes
+    /// the two agree.
+    const PER_FABRIC: usize = C::SUBSCRIPTIONS_PER_FABRIC;
+}
+
+impl<C: Config, const N: usize, const P: usize> crate::config::SubscriptionCapacity
+    for SubscriptionTable<C, N, P>
+{
+    const PATHS: usize = P;
+}
+
+impl<C: Config, const N: usize, const P: usize> SubscriptionTable<C, N, P> {
+    /// Compile-time proof that this table can keep §2.11.2.2's promise.
+    ///
+    /// > A publisher SHALL ensure that every fabric the node is commissioned into can support
+    /// > at least three Subscribe Interactions to the publisher.
+    ///
+    /// A promise of `SUBSCRIPTIONS_PER_FABRIC` to each of `FABRICS` fabrics needs room for
+    /// their product. Without this the node advertises a guarantee it cannot keep, and the
+    /// fabric that finds out is the last one commissioned.
+    pub const CHECK: () = {
+        let () = Self::CHECK;
+        assert!(
+            N >= C::SUBSCRIPTIONS_PER_FABRIC * C::FABRICS,
+            "SubscriptionTable: Core §2.11.2.2 promises SUBSCRIPTIONS_PER_FABRIC to every \
+             fabric, so the table must hold FABRICS × that many"
+        );
+        assert!(
+            P >= 3,
+            "SubscriptionTable: Core §2.11.2.2 requires at least 3 paths per subscription"
+        );
+    };
 }
 
 impl<C: Config, const N: usize, const P: usize> Default for SubscriptionTable<C, N, P> {
@@ -557,9 +598,9 @@ impl<C: Config, const N: usize, const P: usize> Default for SubscriptionTable<C,
 pub enum SubscribeError {
     /// §8.5.2.2: "At least one attribute or event SHALL be indicated in the action."
     NoPaths,
-    /// More paths than [`Config::SUB_PATHS`] admits.
+    /// More paths than the table's `P` admits — §11.1.4.4's `SubscribePathsSupported`.
     TooManyPaths,
-    /// More subscriptions than [`Config::SUBSCRIPTIONS`] admits. §8.10's `RESOURCE_EXHAUSTED`.
+    /// More subscriptions than the table's `N` admits. §8.10's `RESOURCE_EXHAUSTED`.
     Full,
     /// This fabric already holds [`Config::SUBSCRIPTIONS_PER_FABRIC`] subscriptions.
     ///
@@ -926,14 +967,18 @@ impl<C: Config, const N: usize, const P: usize> SubscriptionTable<C, N, P> {
     /// minimum there is nothing left over and PASE subscriptions are refused, which is what
     /// "subject to available resources" means when there are none.
     fn admit(&self, fabric: Option<FabricIndex>) -> core::result::Result<(), SubscribeError> {
+        let share = <Self as crate::config::Capacity>::PER_FABRIC;
         if fabric.is_some() {
-            return if self.len_of_fabric(fabric) >= C::SUBSCRIPTIONS_PER_FABRIC {
+            return if self.len_of_fabric(fabric) >= share {
                 Err(SubscribeError::FabricQuota)
             } else {
                 Ok(())
             };
         }
-        let promised = C::FABRICS.saturating_mul(C::SUBSCRIPTIONS_PER_FABRIC);
+        // `Self::CHECK` has already refused, at compile time, a table too small to owe every
+        // fabric its share — so this subtraction cannot be hiding a promise the node has
+        // already broken.
+        let promised = C::FABRICS.saturating_mul(share);
         let claimed = self
             .subscriptions
             .iter()

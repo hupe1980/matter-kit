@@ -17,7 +17,10 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::panic
+    clippy::panic,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
 )]
 
 use matter_kit::im::AttributePath;
@@ -29,11 +32,9 @@ use matter_kit::msg::{FabricIndex, SessionId};
 use matter_kit::platform::{Duration, Instant};
 use matter_kit::{Config, DefaultConfig};
 
-type Table = SubscriptionTable<
-    DefaultConfig,
-    { DefaultConfig::SUBSCRIPTIONS },
-    { DefaultConfig::SUB_PATHS },
->;
+// The specification's own minimum for five fabrics: three subscriptions each and three paths
+// apiece. `SubscriptionTable::CHECK` is what refuses less.
+type Table = SubscriptionTable<DefaultConfig>;
 
 fn at(seconds: u64) -> Instant {
     Instant::ZERO.saturating_add(Duration::from_secs(seconds))
@@ -366,8 +367,8 @@ fn a_full_table_refuses_but_re_subscribing_still_works() {
     let paths = [path(1, 0x0006, 0x0000)];
     // Spread across fabrics, because §2.11.2.2 caps what any one of them may hold: filling the
     // table from a single fabric is the thing the per-fabric quota exists to prevent.
-    for index in 0..DefaultConfig::SUBSCRIPTIONS {
-        let fabric = u8::try_from(index / DefaultConfig::SUBSCRIPTIONS_PER_FABRIC)
+    for index in 0..<Table as matter_kit::Capacity>::TOTAL {
+        let fabric = u8::try_from(index / <Table as matter_kit::Capacity>::PER_FABRIC)
             .expect("fits")
             .saturating_add(1);
         let session = NewSubscription {
@@ -413,7 +414,7 @@ fn a_fabrics_quota_is_its_own() {
     let mut table = Table::new();
     let paths = [path(1, 0x0006, 0x0000)];
 
-    for n in 0..DefaultConfig::SUBSCRIPTIONS_PER_FABRIC {
+    for n in 0..<Table as matter_kit::Capacity>::PER_FABRIC {
         let request = NewSubscription {
             session: Some(SessionId(u16::try_from(n).expect("fits"))),
             fabric_index: Some(FabricIndex(1)),
@@ -438,7 +439,7 @@ fn a_fabrics_quota_is_its_own() {
     );
 
     // A second fabric gets its own three, which is the guarantee.
-    for n in 0..DefaultConfig::SUBSCRIPTIONS_PER_FABRIC {
+    for n in 0..<Table as matter_kit::Capacity>::PER_FABRIC {
         let other = NewSubscription {
             session: Some(SessionId(
                 u16::try_from(n).expect("fits").saturating_add(100),
@@ -474,8 +475,8 @@ fn a_fabricless_subscription_never_eats_a_fabrics_guarantee() {
     // DefaultConfig is sized exactly to FABRICS * SUBSCRIPTIONS_PER_FABRIC, so every slot is
     // promised and there is no slack.
     assert_eq!(
-        DefaultConfig::SUBSCRIPTIONS,
-        DefaultConfig::FABRICS * DefaultConfig::SUBSCRIPTIONS_PER_FABRIC
+        <Table as matter_kit::Capacity>::TOTAL,
+        DefaultConfig::FABRICS * <Table as matter_kit::Capacity>::PER_FABRIC
     );
     assert_eq!(table.subscribe(&pase, at(0)), Err(SubscribeError::Full));
     assert_eq!(table.len(), 0, "and nothing was stored");
@@ -502,7 +503,8 @@ fn more_paths_than_the_node_supports_is_paths_exhausted() {
     // requested." §2.11.2.2 puts the floor at three per subscription, which `Config::SUB_PATHS`
     // asserts at compile time.
     let mut table = Table::new();
-    let too_many: Vec<AttributePath> = (0..=DefaultConfig::SUB_PATHS as u32)
+    let too_many: Vec<AttributePath> = (0..=<Table as matter_kit::SubscriptionCapacity>::PATHS
+        as u32)
         .map(|attribute| path(1, 0x0006, attribute))
         .collect();
     assert_eq!(
@@ -515,7 +517,8 @@ fn more_paths_than_the_node_supports_is_paths_exhausted() {
     );
 
     // Exactly the limit fits.
-    let exactly: Vec<AttributePath> = (0..DefaultConfig::SUB_PATHS as u32)
+    let exactly: Vec<AttributePath> = (0..<Table as matter_kit::SubscriptionCapacity>::PATHS
+        as u32)
         .map(|attribute| path(1, 0x0006, attribute))
         .collect();
     assert!(table.subscribe(&request(&exactly, 0, 60), at(0)).is_ok());

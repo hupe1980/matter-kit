@@ -129,6 +129,10 @@ impl<const N: usize, const EFS: usize, const F: usize> SceneTable<N, EFS, F> {
 
     /// `SceneTableSize` (§1.4.8.1) — the total across all fabrics.
     #[must_use]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "§1.4.8.1's scene table length is a uint16, and N is asserted to fit one"
+    )]
     pub const fn size(&self) -> u16 {
         // A table larger than 65 535 cannot be reported, so it is not a table this cluster
         // can honestly serve; saturating says the largest number it can.

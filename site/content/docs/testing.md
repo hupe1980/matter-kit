@@ -168,10 +168,14 @@ difference, so the comparison stays honest as the specification moves.
 
 ## The gates
 
-Every change runs: the suite under `std` and under `--no-default-features`; Clippy over every
-target in both modes; rustdoc with warnings denied; builds for two bare-metal targets with
-and without `defmt`; the full feature powerset; the minimum supported Rust version; a
-regeneration of the cluster library, diffed; licence and advisory checks; and the fuzzers.
+Every change runs: the suite under `--all-features`, under `std` and under
+`--no-default-features`; Clippy over every target in both modes; rustdoc with warnings denied;
+builds for two bare-metal targets with and without `defmt`; the full feature powerset; the
+minimum supported Rust version; a regeneration of the cluster library, diffed; licence and
+advisory checks; the fuzzers; a link of a whole light for an nRF52840, against a size budget;
+and two checks that the documents still describe the repository — every number they state
+(`cargo xtask stats --check`) and the specification index generated from the source
+(`cargo xtask coverage --check`).
 
 ## Meeting other implementations
 
@@ -219,9 +223,7 @@ issued by the reference implementation.
 ./interop/chip/python.sh --list   # all 618
 ```
 
-## The two checks that need a local copy of something
-
-Neither can run in a hosted CI job, and both have found defects nothing else could.
+## The checks you run yourself
 
 ```sh
 cargo xtask cite    # every § reference and every normative quotation, against the PDFs
@@ -229,16 +231,20 @@ cargo xtask api     # every pub fn against every call site: what nothing calls
 ./footprint/run.sh  # link a light for an nRF52840 and read the sections out
 ```
 
+`cargo xtask api` runs anywhere; the other two need something a hosted job does not have.
+
 `cargo xtask cite` needs the specification PDFs, which are free from csa-iot.org and not
 redistributable, so they are not in the repository. It reads these guides too — a `>` blockquote
 here is a claim about the specification exactly as a `///` block in the source is. It is the
 first thing to run before a specification uplift: a renumbering between revisions is exactly
-what it finds, and fourteen citations in this crate have been wrong, three of them quotations
+what it finds, and fifteen citations in this crate have been wrong, three of them quotations
 that were real but abridged past the point of being verbatim.
 
 `cargo xtask api` is cheaper and blunter. A public function nothing calls is usually spare API
-and occasionally the missing half of a rule — three of this crate's defects were exactly that,
-including a session table that answered "no space" where §4.11.1.1 requires an eviction.
+and occasionally the missing half of a rule — four of this crate's defects were exactly that,
+including a session table that answered "no space" where §4.11.1.1 requires an eviction. Its
+second list matters as much: called from tests or examples but from nothing in the library, which
+is where a rule the *application* has to remember shows up.
 
 A **skip** is reported as a skip and exits non-zero. Most `TC_*.py` carry a `has_attribute` or
 `has_feature` decorator, so a device that does not implement the thing a case tests does not fail

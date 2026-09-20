@@ -334,7 +334,7 @@ fn write_extension(writer: &mut DerWriter<'_>, extension: &Extension<'_>) -> Res
             (CE_AUTHORITY_KEY_IDENTIFIER, false)
         }
         Extension::Future(der) => {
-            // §6.5.11.7 makes this the one extension that needs no reconstruction at all:
+            // §6.5.11.6 makes this the one extension that needs no reconstruction at all:
             // "The future-extension field SHALL be encoded as OCTET STRING and it SHALL be an
             // exact copy of the DER encoded extension field (including the DER encoded ASN.1
             // OID of the extension) in the corresponding X.509 certificate."
@@ -365,6 +365,10 @@ fn write_extension(writer: &mut DerWriter<'_>, extension: &Extension<'_>) -> Res
 ///
 /// So Matter's `digitalSignature = 0x0001` is X.509 bit 0, which is `0x80` in the first
 /// octet. Trailing zero bits are trimmed and counted, as DER requires for a named bit list.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "a KeyUsage bit string is nine bits; §6.5.11.2 puts the low eight in one octet"
+)]
 fn write_key_usage_bit_string(writer: &mut DerWriter<'_>, usage: KeyUsage) -> Result<()> {
     let bits = usage.bits();
     if bits == 0 {

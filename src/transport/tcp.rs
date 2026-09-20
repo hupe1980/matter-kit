@@ -50,13 +50,13 @@ pub const LENGTH_PREFIX: usize = 4;
 /// figure to compare against: anything at or below it did not need this transport.
 pub const DATAGRAM_MAX: usize = 1280;
 
-/// [`DefaultConfig`](crate::DefaultConfig)'s §4.15.2.3 Maximum Message Size, for a node that
-/// has not chosen its own.
+/// A §4.15.2.3 Maximum Message Size for a node that has not chosen its own.
 ///
-/// The number lives on [`Config::MAX_TCP_MSG`](crate::Config::MAX_TCP_MSG), where a device
-/// sizes it along with every other table; this is the same value under the name the framer's
-/// `N` is usually written with.
-pub const DEFAULT_MAX_MESSAGE: usize = <crate::DefaultConfig as crate::Config>::MAX_TCP_MSG;
+/// The specification sets no figure — "The system platform MAY configure a Maximum Message Size
+/// for the payload that it is capable of receiving" — so this is a default rather than a limit,
+/// and it is the [`Framer`]'s `N`. A device that cannot spare 64 KiB writes a smaller `N`; there
+/// is deliberately no second place that also states it.
+pub const DEFAULT_MAX_MESSAGE: usize = 64 * 1024;
 
 /// What a framer produced from the bytes it has so far.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
