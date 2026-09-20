@@ -42,8 +42,15 @@ echo "==> Linking a light for $TARGET"
 # fingerprints behind, and then `cargo build` is a no-op that produces no image at all. Only this
 # crate's own artifacts go; its dependencies stay cached, so this costs one link. It also makes
 # the figure below an image of *this* tree rather than whatever was in the target directory.
-(cd "$HERE" && cargo clean --release -p matter-kit-footprint --quiet 2>/dev/null || true)
-(cd "$HERE" && cargo build --release --quiet)
+#
+# `RUSTFLAGS` is cleared for both, and that is not optional. The linker script arrives through
+# `.cargo/config.toml` as `target.<triple>.rustflags`, and the `RUSTFLAGS` *environment variable*
+# does not merge with that — it replaces it. So any caller with `RUSTFLAGS` set (CI sets
+# `-D warnings` for every job) silently drops `-C link-arg=-Tlink.x`: rust-lld then cannot find
+# `_start`, garbage-collects the program, and writes an image of nothing but debug sections.
+# A footprint must not depend on the caller's environment.
+(cd "$HERE" && env -u RUSTFLAGS cargo clean --release -p matter-kit-footprint --quiet 2>/dev/null || true)
+(cd "$HERE" && env -u RUSTFLAGS cargo build --release --quiet)
 
 # `llvm-size` exits 0 when it cannot read the file — it reports the error on stderr and prints
 # nothing — so a missing or misplaced image gives four empty section sizes, bash arithmetic turns
