@@ -7,7 +7,7 @@ Notable changes to the published crate, newest first. The format follows
 [The stability policy](https://hupe1980.github.io/matter-kit/docs/stability/) has the rest, and
 `cargo-semver-checks` enforces it in CI.
 
-## [0.3.0] — unreleased
+## [0.3.0] — 2026-09-20
 
 Three claims the crate made about itself turned out to be false, and are now enforced rather
 than asserted: that a table's size is checked against the specification, that provisional
@@ -189,6 +189,6 @@ commissioning and the fail-safe; the interaction model with subscriptions, event
 access control; DNS-SD discovery; BDX and OTA; groupcast; and the cluster library generated from
 the CSA data model with the conformance expression for every element.
 
-[0.3.0]: https://github.com/hupe1980/matter-kit/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/hupe1980/matter-kit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hupe1980/matter-kit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/hupe1980/matter-kit/releases/tag/v0.1.0

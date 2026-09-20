@@ -18,13 +18,13 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
+use matter_kit::DefaultConfig;
 use matter_kit::im::subscription::{
     NewSubscription, ReportReason, SubscribeError, SubscriptionPolicy, SubscriptionTable,
 };
 use matter_kit::im::{AttributePath, SubscribeRequest};
 use matter_kit::msg::{FabricIndex, SessionId};
 use matter_kit::platform::{Duration, Instant};
-use matter_kit::{Config, DefaultConfig};
 
 type Table = SubscriptionTable<DefaultConfig>;
 

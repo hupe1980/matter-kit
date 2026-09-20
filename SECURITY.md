@@ -62,7 +62,7 @@ specification forbids or refuses one it requires.
 | Resource exhaustion is a value, not an abort | fixed-capacity tables answer `NoSpace`/`Busy`, which become `RESOURCE_EXHAUSTED` on the wire | the fuzz targets assert the tables stay inside their capacity |
 | A build that cannot be certified does not compile | every table asserts, at compile time, that it can keep the per-fabric promises the node advertises | `tests/capacity.rs`, and a `compile_fail` doctest |
 | Provisional mechanisms are off unless asked for | `Cluster::validate` reports a defect for any element the specifications call provisional, unless the `provisional` feature is on | `tests/provisional.rs` |
-| Dependencies are few and checked | <!-- stats:deps-no-std -->12<!-- /stats --> crates in a `no_std` build, <!-- stats:deps-rustcrypto -->50<!-- /stats --> with the software cryptographic backend; `cargo-deny` gates licences and advisories, with `yanked = "deny"` | CI |
+| Dependencies are few and checked | <!-- stats:deps-no-std -->12<!-- /stats --> crates in a `no_std` build, <!-- stats:deps-rustcrypto -->48<!-- /stats --> with the software cryptographic backend; `cargo-deny` gates licences and advisories, with `yanked = "deny"` | CI |
 | Builds are hermetic | generated code is committed and diff-checked; no `build.rs`, no code generation and no network in `cargo build` | CI |
 
 ## Support and maintenance

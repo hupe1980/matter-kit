@@ -18,7 +18,6 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use matter_kit::Config;
 use matter_kit::config::DefaultConfig;
 use matter_kit::im::persist;
 use matter_kit::im::subscription::SubscriptionTable;

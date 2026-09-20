@@ -114,12 +114,12 @@ pub fn collect(root: &Path) -> Result<Vec<Stat>, String> {
             push(
                 "deps-no-std",
                 Some(bare.to_string()),
-                "crates in a `no_std` build with no cryptographic backend",
+                "crates in a `no_std` device build with no cryptographic backend",
             );
             push(
                 "deps-rustcrypto",
                 Some(with_crypto.to_string()),
-                "crates with the software cryptographic backend",
+                "crates in a device build with the software cryptographic backend",
             );
         }
         None => {
@@ -368,6 +368,18 @@ fn count_matches(path: &Path, mut f: impl FnMut(&str) -> bool) -> Result<usize, 
 ///
 /// Returns `None` when `cargo tree` cannot run — an offline machine with a cold registry, say —
 /// so a checkout that cannot resolve reports honestly instead of guessing.
+/// The target these counts are resolved for.
+///
+/// Without it the answer is the host's, and the host's is not the one anybody means: `cpufeatures`
+/// pulls `libc` on aarch64 macOS and not on x86-64 Linux, so the same checkout reported 50 crates
+/// on a developer's laptop and 49 in CI, and the gate failed on the machine that was right. A
+/// device target is both reproducible everywhere and the figure a compliance reviewer is asking
+/// for — it is what a shipped image links. `thumbv7em-none-eabihf` and
+/// `riscv32imac-unknown-none-elf` agree, so the choice between them does not matter.
+///
+/// `cargo tree` resolves a graph rather than building one, so this needs no installed toolchain.
+const DEPENDENCY_TARGET: &str = "thumbv7em-none-eabihf";
+
 fn dependency_counts(root: &Path) -> Option<(usize, usize)> {
     let count = |features: &[&str]| -> Option<usize> {
         let mut cmd =
@@ -379,6 +391,8 @@ fn dependency_counts(root: &Path) -> Option<(usize, usize)> {
             "--prefix",
             "none",
             "--no-default-features",
+            "--target",
+            DEPENDENCY_TARGET,
         ]);
         if !features.is_empty() {
             cmd.args(["--features", &features.join(",")]);
