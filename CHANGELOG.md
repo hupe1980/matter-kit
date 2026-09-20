@@ -98,6 +98,12 @@ provisional element inside an otherwise certifiable cluster was served on a defa
   `--no-default-features` only, so sixty tests behind `provisional`, `paf`, `nfc` and
   `sync-mutex` — the Groupcast cluster, Wi-Fi PAF and NFC — were compiled by the feature
   powerset but never run.
+- **The footprint gate measures the image again.** `llvm-size` exits 0 when it cannot read a
+  file, so a missing image gave four empty section sizes, bash turned those into `0`, and a
+  0 KiB build passed both budgets — the gate reported success while measuring nothing.
+  `footprint/run.sh` now checks the image exists, requires every section to parse, and forces
+  the link rather than trusting a restored cache; `stats` treats a 0 KiB image as a failed
+  measurement rather than a fact.
 - **`cargo xtask stats`** produces every measurement these documents make — clusters, device
   types, cluster behaviours, fuzz targets, test files, dependency counts, flash, RAM, and the
   size of the citation sweep — and `--check` fails CI when a document states a number the

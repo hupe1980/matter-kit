@@ -418,7 +418,15 @@ fn dependency_counts(root: &Path) -> Option<(usize, usize)> {
 
 /// The last footprint `footprint/run.sh` measured, if it has ever run here.
 fn read_footprint(path: &Path) -> Option<(u64, u64)> {
-    read_pair(path, "flash_kib", "ram_kib")
+    // A linked image is never 0 KiB. `llvm-size` exits 0 when it cannot read a file, so a broken
+    // measurement used to arrive here as a pair of zeros and get reported as fact — which marked
+    // every true footprint in the documents stale. `footprint/run.sh` now refuses to write that,
+    // and this refuses to believe it: unmeasured is the honest answer, and it leaves the
+    // documents alone.
+    match read_pair(path, "flash_kib", "ram_kib")? {
+        (0, _) | (_, 0) => None,
+        pair => Some(pair),
+    }
 }
 
 /// Two integer fields out of a flat JSON object, without a JSON dependency.
@@ -475,6 +483,32 @@ mod tests {
         let by_key = BTreeMap::new();
         let text = "<!-- stats:clusters -->135";
         assert!(substitute(text, &by_key, Path::new("x.md")).is_err());
+    }
+
+    #[test]
+    fn a_zero_footprint_is_a_failed_measurement_rather_than_a_small_image() {
+        let dir = std::env::temp_dir().join("matter-kit-stats-zero-footprint");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("last.json");
+
+        std::fs::write(&path, r#"{"flash_kib": 0, "ram_kib": 0}"#).unwrap();
+        assert_eq!(
+            read_footprint(&path),
+            None,
+            "0 KiB is llvm-size having failed"
+        );
+
+        std::fs::write(&path, r#"{"flash_kib": 88, "ram_kib": 0}"#).unwrap();
+        assert_eq!(
+            read_footprint(&path),
+            None,
+            "either half being 0 is the same failure"
+        );
+
+        std::fs::write(&path, r#"{"flash_kib": 88, "ram_kib": 39}"#).unwrap();
+        assert_eq!(read_footprint(&path), Some((88, 39)));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

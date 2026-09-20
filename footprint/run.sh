@@ -37,13 +37,48 @@ if [ ! -x "$SIZE" ]; then
 fi
 
 echo "==> Linking a light for $TARGET"
+# The link is forced rather than left to cargo's freshness check. A cache action that prunes
+# workspace binaries to keep the cache small — `Swatinem/rust-cache` does — can leave cargo's
+# fingerprints behind, and then `cargo build` is a no-op that produces no image at all. Only this
+# crate's own artifacts go; its dependencies stay cached, so this costs one link. It also makes
+# the figure below an image of *this* tree rather than whatever was in the target directory.
+(cd "$HERE" && cargo clean --release -p matter-kit-footprint --quiet 2>/dev/null || true)
 (cd "$HERE" && cargo build --release --quiet)
+
+# `llvm-size` exits 0 when it cannot read the file — it reports the error on stderr and prints
+# nothing — so a missing or misplaced image gives four empty section sizes, bash arithmetic turns
+# those into 0, and a 0 KiB image passes both budgets. `set -euo pipefail` does not catch any of
+# it. That is not hypothetical: it is how this gate came to report 88 KiB on a laptop and 0 in
+# CI, passing in both places. So the image is checked first, and every section has to parse.
+if [ ! -f "$IMAGE" ]; then
+  echo "no image at $IMAGE — the build above did not produce one" >&2
+  echo "what is there instead:" >&2
+  ls -R "$HERE/target" 2>/dev/null | head -40 >&2
+  exit 1
+fi
 
 section() { "$SIZE" -A "$IMAGE" | awk -v s="$1" '$1 == s { print $2 }'; }
 text=$(section .text)
 rodata=$(section .rodata)
 bss=$(section .bss)
 data=$(section .data)
+
+# `.data` is legitimately absent on an image with no initialised statics, so it defaults rather
+# than failing; the other three are not optional and an empty one means the output was not read.
+data=${data:-0}
+for pair in "text:$text" "rodata:$rodata" "bss:$bss"; do
+  name=${pair%%:*}
+  value=${pair#*:}
+  case $value in
+    "" | *[!0-9]*)
+      echo "could not read .$name out of $IMAGE (got '$value')" >&2
+      echo "$SIZE -A said:" >&2
+      "$SIZE" -A "$IMAGE" >&2 || true
+      exit 1
+      ;;
+  esac
+done
+
 flash=$((text + rodata + data))
 ram=$((bss + data))
 
