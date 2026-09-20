@@ -98,11 +98,14 @@ provisional element inside an otherwise certifiable cluster was served on a defa
   `--no-default-features` only, so sixty tests behind `provisional`, `paf`, `nfc` and
   `sync-mutex` — the Groupcast cluster, Wi-Fi PAF and NFC — were compiled by the feature
   powerset but never run.
-- **The footprint gate measures the image again.** `llvm-size` exits 0 when it cannot read a
-  file, so a missing image gave four empty section sizes, bash turned those into `0`, and a
-  0 KiB build passed both budgets — the gate reported success while measuring nothing.
-  `footprint/run.sh` now checks the image exists, requires every section to parse, and forces
-  the link rather than trusting a restored cache; `stats` treats a 0 KiB image as a failed
+- **The footprint gate measures an image again.** CI sets `RUSTFLAGS` for every job, and that
+  environment variable *replaces* `target.<triple>.rustflags` rather than merging with it — so
+  the linker script in `footprint/.cargo/config.toml` was dropped, rust-lld garbage-collected the
+  program for want of `_start`, and the image held nothing but debug sections. `llvm-size` then
+  exits 0 when it cannot read a section, bash turned the empty results into `0`, and a 0 KiB
+  build passed both budgets: the gate had been reporting success while measuring nothing.
+  `footprint/run.sh` now builds with a clean `RUSTFLAGS`, forces the link, checks the image
+  exists and requires every section to parse; `stats` treats a 0 KiB image as a failed
   measurement rather than a fact.
 - **`cargo xtask stats`** produces every measurement these documents make — clusters, device
   types, cluster behaviours, fuzz targets, test files, dependency counts, flash, RAM, and the

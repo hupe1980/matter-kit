@@ -37,26 +37,18 @@ if [ ! -x "$SIZE" ]; then
 fi
 
 echo "==> Linking a light for $TARGET"
-# The link is forced rather than left to cargo's freshness check. A cache action that prunes
-# workspace binaries to keep the cache small — `Swatinem/rust-cache` does — can leave cargo's
-# fingerprints behind, and then `cargo build` is a no-op that produces no image at all. Only this
-# crate's own artifacts go; its dependencies stay cached, so this costs one link. It also makes
-# the figure below an image of *this* tree rather than whatever was in the target directory.
-#
-# `RUSTFLAGS` is cleared for both, and that is not optional. The linker script arrives through
-# `.cargo/config.toml` as `target.<triple>.rustflags`, and the `RUSTFLAGS` *environment variable*
-# does not merge with that — it replaces it. So any caller with `RUSTFLAGS` set (CI sets
-# `-D warnings` for every job) silently drops `-C link-arg=-Tlink.x`: rust-lld then cannot find
-# `_start`, garbage-collects the program, and writes an image of nothing but debug sections.
-# A footprint must not depend on the caller's environment.
+# Two things this must not inherit. A cache that prunes workspace binaries but keeps cargo's
+# fingerprints makes `cargo build` a no-op producing no image, so the link is forced — only this
+# crate's artifacts go, its dependencies stay cached. And `RUSTFLAGS` *replaces*
+# `target.<triple>.rustflags` rather than merging, so a caller that sets it (CI sets
+# `-D warnings` everywhere) drops `-C link-arg=-Tlink.x`, and rust-lld then garbage-collects the
+# whole program for want of `_start` and writes an image of nothing but debug sections.
 (cd "$HERE" && env -u RUSTFLAGS cargo clean --release -p matter-kit-footprint --quiet 2>/dev/null || true)
 (cd "$HERE" && env -u RUSTFLAGS cargo build --release --quiet)
 
-# `llvm-size` exits 0 when it cannot read the file — it reports the error on stderr and prints
-# nothing — so a missing or misplaced image gives four empty section sizes, bash arithmetic turns
-# those into 0, and a 0 KiB image passes both budgets. `set -euo pipefail` does not catch any of
-# it. That is not hypothetical: it is how this gate came to report 88 KiB on a laptop and 0 in
-# CI, passing in both places. So the image is checked first, and every section has to parse.
+# `llvm-size` exits 0 when it cannot read a file, printing nothing — so empty section sizes reach
+# bash arithmetic as 0, and a 0 KiB image passes both budgets with `set -euo pipefail` none the
+# wiser. So the image is checked first, and every section has to parse.
 if [ ! -f "$IMAGE" ]; then
   echo "no image at $IMAGE — the build above did not produce one" >&2
   echo "what is there instead:" >&2
