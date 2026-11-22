@@ -42,6 +42,12 @@ Notable changes to the published crate, newest first. The format follows
   `Lifecycle` to `OperationalCredentials` keeps the old key until the next update.
 - `examples/light` runs on `node::Runtime`: 519 lines, down from 2 235.
 
+### Security
+
+- `heapless` 0.9.4, `crypto-bigint` 0.7.11 and `ctutils` 0.4.8, for RUSTSEC-2026-0574 and -0575
+  (unsound `heapless` APIs) and RUSTSEC-2026-0385 and -0387 (timing variability in constant-time
+  operations).
+
 ### Migrating from 0.3
 
 Replace a hand-written device loop with `node::Device` + `node::Runtime::run`. If you keep your

@@ -123,7 +123,7 @@ firmware image over TCP. Most application clusters' behaviour is what is missing
 
 ## Verification
 
-A light linked for an nRF52840 occupies **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**,
+A light linked for an nRF52840 occupies **<!-- stats:flash-kib -->90<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**,
 measured by `./footprint/run.sh`. No radio is in that image.
 
 <!-- stats:test-files -->77<!-- /stats --> test files, <!-- stats:fuzz-targets -->27<!-- /stats --> fuzz targets, builds for `thumbv7em-none-eabihf` and

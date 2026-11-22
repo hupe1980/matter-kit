@@ -41,7 +41,7 @@ the other Rust one. This one is built around a few decisions that are hard to re
 - **⚙️ No executor.** `async` over `core::future` and small platform traits — sockets, timer,
   randomness, storage. `platform::os` and the simulated `platform::sim` implement them.
 
-A whole light for an nRF52840 links into **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**
+A whole light for an nRF52840 links into **<!-- stats:flash-kib -->90<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**
 (`./footprint/run.sh`; no radio in the image).
 
 ## 🚀 A device
