@@ -83,11 +83,13 @@
 //! # Ok::<(), matter_kit::Error>(())
 //! ```
 
+pub mod advertiser;
 pub mod dns;
 pub mod responder;
 pub mod schedule;
 pub mod txt;
 
+pub use advertiser::Advertiser;
 pub use dns::{Name, ReadData, ReadRecord, RecordType, ResourceRecords};
 pub use responder::{Advertisement, Responder};
 pub use schedule::{Action, Phase, Schedule};

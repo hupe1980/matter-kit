@@ -4,12 +4,16 @@ description = "A Matter 1.6 protocol implementation in Rust: one crate, no_std, 
 template = "index.html"
 
 [extra]
-tagline = "Matter is the CSA smart-home standard behind Apple Home, Google Home, Alexa and SmartThings. matter-kit implements specification 1.6 in a single Rust crate that links into 88 KiB of flash and 39 KiB of RAM on an nRF52840 and brings no runtime of its own."
-status_note = "Under construction and pre-1.0. The CHIP SDK's own chip-tool commissions the example device end to end with attestation verified, and eleven of the CSA Test Harness's certification cases pass against it. A device can be commissioned over IPv6, Bluetooth LE, Wi-Fi PAF or NFC, answer Reads, Writes and Invokes, hold subscriptions, take part in groupcast, and move a firmware image over TCP. Most of the application clusters' behaviour is what is left."
+tagline = "Matter is the CSA smart-home standard behind Apple Home, Google Home, Alexa and SmartThings. matter-kit implements specification 1.6 in a single Rust crate that fits a microcontroller and brings no runtime of its own."
+status_note = "Pre-1.0. The CHIP SDK's chip-tool commissions the example device with attestation verified, and eleven CSA Test Harness cases pass against it. Most application clusters' behaviour is what is left."
 
 [[extra.pillars]]
 title = "One crate"
 body = "Not a family to keep in version step. Everything optional is a Cargo feature, and the code generator is repository tooling rather than a dependency."
+
+[[extra.pillars]]
+title = "The sequence is a type"
+body = "node::Runtime owns what every device must do in order — chunked reads, subscriptions and reports, retransmission, and what follows AddNOC, RemoveFabric or a lapsed fail-safe. The application supplies clusters and sockets."
 
 [[extra.pillars]]
 title = "A capacity is checked against the specification"
@@ -17,7 +21,7 @@ body = "Every table is a fixed-capacity array, and each one asserts at compile t
 
 [[extra.pillars]]
 title = "No runtime is chosen for you"
-body = "async over core::future, reaching the outside world through small traits: sockets, timers, randomness, storage. No executor crate appears anywhere in the tree — the examples run on a block_on of their own."
+body = "async over core::future and small platform traits: sockets, timers, randomness, storage. No executor crate is in the tree."
 
 [[extra.pillars]]
 title = "Nothing panics on network input"

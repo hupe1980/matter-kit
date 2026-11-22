@@ -1,6 +1,6 @@
 +++
 title = "Getting started"
-description = "Install matter-kit, size a node with the Config trait, serve a Read, and run the examples on a simulated network."
+description = "Install matter-kit, size a node, describe it, and run it with node::Runtime."
 weight = 2
 +++
 
@@ -115,36 +115,46 @@ handler.on_lifecycle(Lifecycle::CommissioningComplete(index)); // §11.10.7.6
 code — and adding a cluster to a device adds it to the fan-out by construction. Fabric indices
 are reused: an entry that outlives its fabric is inherited by whoever holds that index next.
 
-## Answer a handshake
+## Run the node
 
-A commissioner's first message arrives on the Secure Channel protocol, and what it needs from
-the node is not one handshake but the rules around it: one at a time, sixty seconds to finish,
-twenty failures and commissioning mode ends — plus the verifier an open Enhanced window supplies
-instead of the printed passcode, and the session that comes out the other end.
+`node::Runtime` drives everything else in order: the secure channel, the interaction model,
+subscriptions and reports, retransmission, and the follow-ups to `AddNOC`, `RemoveFabric`,
+`CommissioningComplete` and a lapsed fail-safe. The application hands it a `Device` — references
+to its node, its cluster handler and the system clusters the runtime has to reach:
 
 ```rust,ignore
-use matter_kit::sc::{Channel, ChannelBuffers, ChannelContext};
+use matter_kit::node::{Device, Mdns, Runtime};
 
-let mut channel = Channel::new();
-
-// …per message, from the socket loop:
-let answered = channel.on_message(
-    &mut stack,
-    header.opcode,
-    &body,
-    &ChannelContext { fabrics: &fabrics, keys: &keys, rng: &rng, window: &window,
-                      verifier: &verifier, parameters: &parameters, now },
-    &mut ChannelBuffers { reply: &mut payload, frame: &mut frame, evict: &mut evict },
-)?;
-
-if let Some(established) = answered.established {
-    // The session is already installed, and §4.11.1.1's eviction has already happened if it
-    // had to. `answered.evicted` is the report its peer is owed, framed and ready to send.
-}
+let device = Device {
+    node,
+    handler: &handler,
+    credentials: &opcreds,              // Operational Credentials: fabrics, keys, fail-safe
+    commissioning: &general_commissioning,
+    access_control: &acl_cluster,
+    group_keys: &group_keys,
+    events: &events,
+    versions: &versions,
+    verifier: &verifier,
+    parameters: &parameters,
+    memberships: Some(&memberships),    // Groups, for the multicast joins
+};
+let mut runtime = Runtime::<DefaultConfig>::new(&rng)?;
+block_on(runtime.run(&device, &udp, Mdns { socket: &mdns, group, interface },
+                     &mut advertiser, &timer, |notice| log(notice)));
 ```
 
-`None` in `answered.reply` means say nothing — a message for a handshake that is not running
-tells a stranger nothing about the node, so it is dropped rather than answered.
+`run` is the loop over the platform traits. Without it the runtime is sans-I/O:
+
+```rust,ignore
+runtime.receive(&device, &mut datagram, from, now); // one datagram in
+runtime.poll(&device, now);                         // timers, reports, retransmissions
+while let Some((peer, bytes)) = runtime.transmit() { send(peer, bytes) }
+let wake = runtime.next_deadline(&device);          // sleep until here
+while let Some(notice) = runtime.notice() { log(notice) }
+```
+
+`discovery::Advertiser` computes the DNS-SD records from the same state: commissionable while
+the node has no fabric or a window is open, one operational record per fabric.
 
 ## Read the wire
 
@@ -175,26 +185,13 @@ peer has to reject.
 
 ```sh
 cargo run --example light --features std
-```
-
-A commissionable node on real sockets: UDP 5540 for Matter, mDNS 5353 so a commissioner can
-find it, PASE from a printed passcode, and the commissioning clusters over the session it
-produces. It prints what to point at it:
-
-```text
 chip-tool pairing onnetwork 1 20202021
 ```
 
-`MATTER_IFINDEX` chooses the interface to advertise on. It defaults to loopback, which is
-enough to see the node from the same machine and not enough to be found from another —
-`ip link` or `ifconfig` gives the real index.
-
-It is a real `On/Off Light`: On/Off with the Lighting feature on endpoint 1, plus the Identify,
-Groups and Scenes Management clusters that device type also requires, and a `Descriptor` on
-each of its two endpoints.
-
-`examples/light.rs` is worth reading as well as running: it is the whole assembly in one file
-with no framework, and it is the shortest answer to "what do I have to write myself?".
+An `On/Off Light` on UDP 5540 and mDNS 5353: On/Off with Lighting, Identify, Groups and Scenes
+Management on endpoint 1. `MATTER_IFINDEX` picks the interface to advertise on (default:
+loopback). [`examples/light.rs`](https://github.com/hupe1980/matter-kit/blob/main/examples/light.rs)
+is the answer to "what do I write myself?".
 
 ## Run the simulated examples
 

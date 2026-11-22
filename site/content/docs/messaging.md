@@ -7,7 +7,8 @@ weight = 3
 Every protocol layer in this crate is sans-I/O, which leaves one question: what turns bytes
 arriving on a socket into a message a protocol can act on? Specification §4.7 answers it in
 two halves — "Message Transmission" and "Message Reception" — and `matter_kit::messaging` is
-those two halves and nothing else.
+those two halves and nothing else. A device does not drive it by hand: `node::Runtime` owns the
+stack and everything below happens inside it. This page is for what it does and why.
 
 ```rust,ignore
 // The two const parameters size the session and exchange tables, and default to a node that
@@ -86,7 +87,7 @@ neither: acknowledged, not delivered.
 
 So `Due::Retransmit` names a counter, not a payload to rebuild. Re-encoding would take a fresh
 counter, which makes it a *different* message — and reuses the AEAD nonce of the one before
-it. The caller keeps the bytes it sent and sends them again.
+it. `node::Runtime` keeps the last reliable datagram per exchange and sends those bytes again.
 
 ## Only an initiator opens an exchange
 

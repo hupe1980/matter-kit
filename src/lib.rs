@@ -184,6 +184,9 @@ pub mod jf;
 #[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
 pub mod messaging;
 pub mod msg;
+#[cfg(feature = "rustcrypto")]
+#[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
+pub mod node;
 pub mod platform;
 pub mod sc;
 #[cfg(feature = "rustcrypto")]

@@ -6,7 +6,7 @@
 //! for the RCAC and ICAC, against 600 of DER — by padding them with a §6.5.11.6
 //! `future-extension` holding a `subjectAltName` full of `A`s.
 //!
-//! That padding is the point. R12 is the risk that this crate cannot regenerate somebody
+//! That padding is the point. The risk is that this crate cannot regenerate somebody
 //! else's DER byte for byte, and §6.5.2 makes that regeneration the *only* way to verify a
 //! Matter certificate's signature — "validating the signature in a Matter certificate entails
 //! its logical conversion to the corresponding X.509 certificate". Every fixture the crate had

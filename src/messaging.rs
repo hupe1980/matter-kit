@@ -586,6 +586,19 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
             .map_or_else(MrpParams::default, |s| s.mrp)
     }
 
+    /// Whether a reliable message this node sent on `exchange` is still awaiting its
+    /// acknowledgement (§4.12.2).
+    ///
+    /// An exchange in that state must not be closed: closing it drops the retransmission, and a
+    /// lost final message — the last chunk of a read, a command's response — is then never
+    /// delivered at all.
+    #[must_use]
+    pub fn is_awaiting_ack(&self, exchange: ExchangeKey) -> bool {
+        self.exchanges
+            .find(exchange)
+            .is_some_and(|e| e.mrp.is_awaiting_ack())
+    }
+
     /// Closes an exchange.
     pub fn close(&mut self, exchange: ExchangeKey) -> bool {
         self.exchanges.close(exchange)
@@ -696,6 +709,15 @@ impl<C: Config, const S: usize, const X: usize> Messaging<C, S, X> {
             // several. What makes it safe is that the *contents* are two header fields and a
             // replay window, and admitting a second handshake at all is refused a layer up by
             // `PaseAdmission`.
+            //
+            // The old context's exchanges go with it. They belong to a peer that is no longer
+            // this context's, and an exchange id is the initiator's to choose: left in place, the
+            // new initiator's first message can land on the old one's exchange — whose reply may
+            // still be awaiting an acknowledgement nobody will send — and be answered with that
+            // exchange's state, or not at all.
+            if self.unsecured_peer.is_some() {
+                self.exchanges.close_session(SessionId::UNSECURED);
+            }
             self.unsecured_peer = Some(UnsecuredPeer {
                 ephemeral_initiator: source,
                 we_initiated: false,

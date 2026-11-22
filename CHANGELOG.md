@@ -7,6 +7,47 @@ Notable changes to the published crate, newest first. The format follows
 [The stability policy](https://hupe1980.github.io/matter-kit/docs/stability/) has the rest, and
 `cargo-semver-checks` enforces it in CI.
 
+## [0.4.0] — 2026-11-22
+
+### Added
+
+- `node::Runtime` — the interaction loop as a library type. It owns the messaging stack, the
+  secure channel and the subscriptions, and keeps the sequence a device must: chunked reads per
+  exchange, the four-message subscribe, one report in flight per subscription, retransmission,
+  closing finished exchanges, cascades on session close, eviction and fabric removal, and the
+  follow-ups to `AddNOC`, `CommissioningComplete` and a fail-safe rollback (including one that
+  lapses with no command). Sans-I/O (`receive`, `poll`, `transmit`, `next_deadline`, `notice`)
+  with `Runtime::run`, an `async` driver over `Udp` and `Timer`.
+- `discovery::Advertiser` — the DNS-SD record set computed from fabrics and the commissioning
+  window, with a random commissionable instance name.
+- `OperationalCredentials::revert_update` and `commit_update`; `Messaging::is_awaiting_ack`.
+
+### Fixed
+
+- A fail-safe rollback after `UpdateNOC` now restores the previous NOC, ICAC, node id and key
+  (§11.10.7.2.2 step 6). Previously the old key was destroyed at once.
+- An exchange idle for exactly `EXCHANGE_IDLE_TIMEOUT` is reclaimed at the deadline
+  `Messaging::wake_at` reports, so a loop woken at that deadline does not spin.
+- A new Unsecured Session Context (§4.13.2.1) closes the previous one's exchanges. A second
+  commissioner's first message could otherwise land on the first one's exchange and be refused.
+- `platform::sim` no longer freezes virtual time on a datagram for a node that has stopped
+  reading.
+- The `log` and `defmt` features log every `node::Notice` at debug level; before, they enabled
+  nothing.
+
+### Changed
+
+- **Breaking.** `UpdateNOC` keeps the replaced operational key until the fail-safe resolves;
+  `CommissioningComplete` (through `Lifecycle`) destroys it. A device that does not route
+  `Lifecycle` to `OperationalCredentials` keeps the old key until the next update.
+- `examples/light` runs on `node::Runtime`: 519 lines, down from 2 235.
+
+### Migrating from 0.3
+
+Replace a hand-written device loop with `node::Device` + `node::Runtime::run`. If you keep your
+own loop, set `InteractionContext::on_session` on every interaction and take the attestation
+challenge from the session (`SecureSession::keys`), not from `sc::Channel`.
+
 ## [0.3.0] — 2026-09-20
 
 Three claims the crate made about itself turned out to be false, and are now enforced rather

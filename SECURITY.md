@@ -61,6 +61,8 @@ specification forbids or refuses one it requires.
 | Secrets do not outlive their use | `zeroize` on every key type; `subtle` for every comparison that could leak a MIC one byte at a time | review, and the types themselves |
 | Resource exhaustion is a value, not an abort | fixed-capacity tables answer `NoSpace`/`Busy`, which become `RESOURCE_EXHAUSTED` on the wire | the fuzz targets assert the tables stay inside their capacity |
 | A build that cannot be certified does not compile | every table asserts, at compile time, that it can keep the per-fabric promises the node advertises | `tests/capacity.rs`, and a `compile_fail` doctest |
+| A removed or rolled-back fabric leaves nothing | `node::Runtime` drops its sessions (after the reply), subscriptions and window, and every cluster forgets it through `Lifecycle`; a lapsed fail-safe is rolled back on its own timer | `tests/node_runtime.rs` |
+| One session's state is never another's | chunked reads, CSR state and attestation challenges are keyed to the exchange or session they belong to | `tests/node_runtime.rs` |
 | Provisional mechanisms are off unless asked for | `Cluster::validate` reports a defect for any element the specifications call provisional, unless the `provisional` feature is on | `tests/provisional.rs` |
 | Dependencies are few and checked | <!-- stats:deps-no-std -->12<!-- /stats --> crates in a `no_std` build, <!-- stats:deps-rustcrypto -->48<!-- /stats --> with the software cryptographic backend; `cargo-deny` gates licences and advisories, with `yanked = "deny"` | CI |
 | Builds are hermetic | generated code is committed and diff-checked; no `build.rs`, no code generation and no network in `cargo build` | CI |

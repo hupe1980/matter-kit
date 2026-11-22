@@ -4,10 +4,9 @@ description = "What is built in matter-kit and what is not, layer by layer, mapp
 weight = 15
 +++
 
-**Under construction and pre-1.0.** A device can be commissioned into a fabric end to end —
-over IPv6, Bluetooth LE, Wi-Fi PAF or NFC — answer Reads, Writes and Invokes against a `const`
-data model, hold subscriptions, record **and report** events, take part in groupcast, and move a firmware
-image over TCP. What is missing is most of the application clusters' behaviour.
+**Pre-1.0.** A device commissions end to end over IPv6, Bluetooth LE, Wi-Fi PAF or NFC, answers
+reads, writes, invokes and subscriptions, reports events, takes part in groupcast and moves a
+firmware image over TCP. Most application clusters' behaviour is what is missing.
 
 ✅ built and tested · 📐 designed, not written
 
@@ -70,6 +69,7 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 | Access control algorithm, CASE Authenticated Tags | Core §6.6 | ✅ |
 | Access Control cluster | Core §9.10 | ✅ |
 | Message processing: sessions, exchanges, MRP composed | Core §4.7 | ✅ |
+| Node runtime: series per exchange, subscribe flow, reports, retransmission, cascades, commissioning follow-ups | Core §4.10.5.3, §4.12.2.1, §8.5.2, §10.2.3, §11.10.7.2.2, §11.18.6.8 | ✅ |
 | Interaction model client: chunk reassembly | Core §10.2.3 | ✅ |
 | Atomic writes | Core §7.15 | ✅ |
 | Binding, Fixed Label, User Label | Core §9.6, §9.8, §9.9 | ✅ |
@@ -114,6 +114,7 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 |---|---|---|
 | DNS-SD records, TXT keys, mDNS responder | Core §4.3 | ✅ |
 | mDNS probing, announcing, conflict resolution, rate limits | RFC 6762 §6, §8, §9 | ✅ |
+| The advertisement set: operational per fabric, commissionable by window | Core §4.3.1, §4.3.2, §11.19.7 | ✅ |
 | Platform seams, simulator, `std` backends | — | ✅ |
 | Compile-time sizing | Core §2.11 | ✅ |
 | Operating-system mDNS backends, Thread SRP client | Core §4.3 | 📐 |
@@ -122,16 +123,10 @@ image over TCP. What is missing is most of the application clusters' behaviour.
 
 ## Verification
 
-A light linked for an nRF52840 occupies **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM** — `.text` 85 744,
-`.rodata` 4 516, `.bss` 40 576 — measured by `./footprint/run.sh`, which builds the image,
-reads the sections out of it and writes them where `cargo xtask stats` can check this page
-against them. No radio is in that image.
+A light linked for an nRF52840 occupies **<!-- stats:flash-kib -->88<!-- /stats --> KiB of flash and <!-- stats:ram-kib -->39<!-- /stats --> KiB of RAM**,
+measured by `./footprint/run.sh`. No radio is in that image.
 
-1823 tests, <!-- stats:fuzz-targets -->27<!-- /stats --> fuzz targets clean, builds for `thumbv7em-none-eabihf` and
-`riscv32imac-unknown-none-elf`, and a full feature powerset. See
-[Testing](@/docs/testing.md) for what each of those actually checks.
-
-Separately from all of it, `interop/chip/run.sh` has the CHIP SDK's own `chip-tool`
-commission the `light` example in a container, with device attestation verified rather than
-bypassed. It is the only check here with somebody else's implementation on the other end, and
-it is the one that has found what the rest could not.
+<!-- stats:test-files -->77<!-- /stats --> test files, <!-- stats:fuzz-targets -->27<!-- /stats --> fuzz targets, builds for `thumbv7em-none-eabihf` and
+`riscv32imac-unknown-none-elf`, and a full feature powerset — see [Testing](@/docs/testing.md).
+`interop/chip/run.sh` has the CHIP SDK's `chip-tool` commission the `light` example with
+attestation verified; it is the check with somebody else's implementation on the other end.

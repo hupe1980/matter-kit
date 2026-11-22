@@ -43,3 +43,12 @@ footprint/last.json
 # committing it, because it describes one resolution of one version.
 matter-kit.cdx.json
 *.cdx.json
+
+# This project's own feature specifications, and the Spec Kit machinery that produces them:
+# one `specs/NNN-slug/` per concepts/ROADMAP.md item, `.specify/memory/constitution.md`, the
+# ThreatSpec threat model, and the `/speckit-*` skills. Same rule as `concepts/`: internal,
+# and the published tree may not cite a path its reader does not have. Matching eebus,
+# ocpp-kit and sepa.
+/specs/
+/.specify/
+/.claude/

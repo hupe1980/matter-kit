@@ -1,85 +1,68 @@
-# `fuzz/` and `interop/` are workspaces of their own. `cargo fuzz` builds the first with
-# sanitizer flags, and a member here would pull `libfuzzer-sys` into every ordinary
-# `cargo build`; the second depends on `rs-matter`, whose 217 crates would otherwise land in
-# this crate's dependency graph, its feature powerset and its MSRV.
+# `fuzz/` and `interop/` are separate workspaces, so `libfuzzer-sys` and `rs-matter` never enter
+# this crate's dependency graph, feature powerset or MSRV.
 [workspace]
 members = ["xtask"]
 exclude = ["fuzz", "interop"]
 
 [package]
 name = "matter-kit"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["hupe1980"]
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 description = "Matter (CSA smart-home standard) protocol implementation in Rust: no_std, no-alloc, executor-agnostic"
 repository = "https://github.com/hupe1980/matter-kit"
-# The guides, not the source: `repository` already names the source, and cargo warns when the
-# two are the same URL. This is what `site/` deploys to.
 homepage = "https://hupe1980.github.io/matter-kit"
 documentation = "https://docs.rs/matter-kit"
 keywords = ["matter", "smart-home", "iot", "thread", "embedded"]
 categories = ["network-programming", "embedded", "encoding", "no-std"]
 readme = "README.md"
-exclude = ["concepts/", "site/"]
+exclude = ["concepts/", "site/", "specs/", ".specify/", ".claude/"]
 
 [features]
 # The default build is the certifiable device build: `no_std`, no allocation, UDP + MRP.
 default = ["rustcrypto"]
 
-# Allocation: the growable collections a controller on a big machine wants. Not TCP —
-# `transport::tcp::Framer<N>` is a fixed-capacity buffer like every other table here.
+# Growable collections, for controllers on big machines.
 alloc = []
-# The operating system: sockets, a file-backed key-value store, `std::error::Error`.
-#
-# `socket2` comes with it, and only for one thing: binding the mDNS port with SO_REUSEADDR.
-# `std::net` cannot set a socket option before `bind`, and `unsafe_code` is forbidden here, so
-# there is no way to reach `setsockopt` without it — and without SO_REUSEADDR a node cannot
-# bind 5353 on any machine already running Avahi or mDNSResponder, which is every developer's.
+# Sockets, a file-backed key-value store, `std::error::Error`. `socket2` binds mDNS with
+# SO_REUSEADDR, which `std::net` cannot do without `unsafe`.
 std = ["alloc", "dep:socket2"]
 
-# The cryptographic backend. The cryptosuite itself is fixed by the specification —
-# "There is no cryptosuite negotiation in this protocol: one version of the Message Format
-# has one cryptosuite" (Core ch. 3) — so what a feature selects is the *implementation*,
-# not the algorithms: software here, an accelerator or a vendor library later.
+# The software cryptographic backend. Core ch. 3 fixes the algorithms; this selects the
+# implementation.
 rustcrypto = [
     "dep:sha2", "dep:hmac", "dep:hkdf", "dep:pbkdf2",
     "dep:aes", "dep:ccm", "dep:ctr",
     "dep:p256", "dep:elliptic-curve", "dep:rand_core",
 ]
 
-# Multi-threaded controllers. Swaps `sync::Shared`'s `RefCell` for a `std::sync::RwLock`, so a
-# controller's state is `Send + Sync` and its run future can be spawned on a work-stealing
-# runtime. A device never wants this: it is single-threaded by construction, and a lock turns a
-# borrow bug that would have panicked at the mistake into one that waits somewhere else.
+# Multi-threaded controllers: `sync::Shared` becomes a `RwLock`, so state is `Send + Sync`.
+# Devices are single-threaded and do not want it.
 sync-mutex = ["std"]
 
-# Core §2.13 provisional items. Never on by default: a provisional mechanism is not
-# certifiable and may change in a 1.6.x revision.
+# Core §2.13 provisional items: not certifiable, and may change in a 1.6.x revision.
 provisional = []
 
-# Wi-Fi Public Action Frame transport (Core §4.20). A hardware capability, not a protocol
-# choice: PAFTP needs a chipset that can send Public Action Frames outside an association.
+# Wi-Fi Public Action Frame transport (Core §4.20), for chipsets that can send PAFs.
 paf = []
 
-# NFC transport (Core §4.21), likewise: NTL needs an NFC-A radio and an ISO-DEP stack.
+# NFC transport (Core §4.21), for an NFC-A radio with ISO-DEP.
 nfc = []
 
-# Logging backends. Mutually exclusive in practice; `log` wins if both are named.
+# Log every `node::Notice` at debug level. Pick one; `log` wins if both are named.
 log = ["dep:log"]
 defmt = ["dep:defmt", "heapless/defmt"]
 
 [dependencies]
-# Fixed-capacity collections. Every table in the crate is one of these — `heapless::Vec<T, N>`
-# with `N` the table's own const parameter, asserted against the specification's minima.
+# Every table is a `heapless` collection sized by its own const parameter.
 heapless = { version = "0.9", default-features = false }
 bitflags = { version = "2.5", default-features = false }
 log = { version = "0.4", default-features = false, optional = true }
 defmt = { version = "1", optional = true }
 
-# Constant-time comparison and key wiping are not optional: they are how the crate avoids
-# leaking a MIC one byte at a time, and how a key stops existing when it is dropped.
+# Constant-time comparison and key wiping; never optional.
 subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1.8", default-features = false, features = ["zeroize_derive"] }
 
@@ -99,15 +82,11 @@ rand_core = { version = "0.10", default-features = false, optional = true }
 socket2 = { version = "0.6", default-features = false, features = ["all"], optional = true }
 
 [dev-dependencies]
-# Test vectors only. Every one of the specification's worked examples is written as the
-# specification prints it — hex — so that a transcription error is visible in the diff
-# rather than hidden in a byte array nobody can read against the document.
+# Specification vectors, written as hex the way the specification prints them.
 hex = "0.4"
 hex-literal = "1"
 
-# Tests whose whole file needs a feature. `required-features` keeps the target from being built
-# at all under `--no-default-features`; the rest of `tests/` gates itself with a `#![cfg(...)]`
-# header, which builds an empty binary instead.
+# Tests whose whole file needs a feature; the rest gate themselves with `#![cfg(...)]`.
 [[test]]
 name = "spake2p_vectors"
 required-features = ["rustcrypto"]
@@ -255,10 +234,7 @@ unsafe_code = "forbid"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 
 [lints.clippy]
-# Every number off the wire is hostile. These are denied
-# crate-wide rather than per-module, because every module that will ever parse bytes is
-# already here or will be, and an allow-list at the module head is a decision somebody
-# has to make deliberately.
+# Every number off the wire is hostile: denied crate-wide, not per module.
 unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
@@ -267,15 +243,7 @@ arithmetic_side_effects = "deny"
 todo = "deny"
 unimplemented = "deny"
 
-# The other half of "every number off the wire is hostile". `arithmetic_side_effects` above
-# catches an overflow; these catch the quieter one — an `as` that drops the high bits with no
-# word from the compiler. The manual pairing code accepted values §5.1.4.1.4 forbids for exactly
-# that reason: a five-digit group holds 99999, the field is sixteen bits, and the surplus fell
-# off a mask.
-#
-# Every deliberate cast carries `#[expect(…, reason = "…")]` naming the invariant that makes it
-# safe — `expect` rather than `allow`, so a rewrite that removes the cast turns the annotation
-# into a warning asking to be deleted, and no reason outlives the code it explains.
+# Truncating casts, the quieter overflow. Deliberate casts carry `#[expect(…, reason)]`.
 cast_possible_truncation = "deny"
 cast_possible_wrap = "deny"
 cast_sign_loss = "deny"

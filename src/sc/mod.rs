@@ -30,7 +30,7 @@
 
 /// PASE and CASE are cryptography; [`status`] is not, and every protocol needs it — so a
 /// node built without a [`crypto`](crate::crypto) backend still has
-/// [`StatusReport`](status::StatusReport).
+/// [`StatusReport`].
 #[cfg(feature = "rustcrypto")]
 #[cfg_attr(docsrs, doc(cfg(feature = "rustcrypto")))]
 pub mod case;

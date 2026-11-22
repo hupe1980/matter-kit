@@ -44,7 +44,7 @@ use matter_kit::clusters::{Cluster, basic_information::Location};
 use matter_kit::commissioning::failsafe::{BasicCommissioningInfo, FailSafe};
 use matter_kit::commissioning::window::CommissioningWindow;
 use matter_kit::crypto::{
-    GROUP_SIZE_BYTES, KeyPurpose, KeyStore, PublicKey, SoftKeyStore, SymmetricKey,
+    GROUP_SIZE_BYTES, KeyHandle, KeyPurpose, KeyStore, PublicKey, SoftKeyStore, SymmetricKey,
 };
 use matter_kit::dm::{ClusterDescriptor, Endpoint, Node, Privilege};
 use matter_kit::fabric::FabricTable;
@@ -1408,20 +1408,12 @@ fn the_cluster_id_and_revision_match_section_11_18() {
     assert!(opcreds::cluster().is_well_formed());
 }
 
-#[test]
-fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
-    // §11.18.6.9: "The Operational Certificate under the accessing fabric index in the NOCs
-    // list SHALL be updated … such that the Node's Operational Identifier within the Fabric
-    // immediately changes", and step 1.c: "All internal data reflecting the prior operational
-    // identifier of the Node within the Fabric SHALL be revoked and removed." The old key is
-    // the first of those, and the one whose survival would silently keep the old identity
-    // usable.
-    let owned = owned();
-    let device = device(&owned);
-    let challenge = SymmetricKey::new([0x42; 16]);
-    let index = commission(&device, &challenge);
+/// Runs `UpdateNOC` on a commissioned fabric under a fresh fail-safe, returning the index, the
+/// key the update replaced and the rotated node id.
+fn update(device: &Device<'_>, challenge: &SymmetricKey) -> (FabricIndex, KeyHandle, NodeId) {
+    let index = commission(device, challenge);
     let _ = device.opcreds.take_change();
-    complete(&device, index, &challenge, at(1));
+    complete(device, index, challenge, at(1));
 
     let old_key = device
         .fabrics
@@ -1430,10 +1422,10 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
         .expect("fabric")
         .operational_key;
 
-    let ctx = over_case(index.0, &challenge, at(10));
+    let ctx = over_case(index.0, challenge, at(10));
     let mut buf = [0u8; 4096];
     invoke(
-        &device,
+        device,
         general_commissioning::ID,
         general_commissioning::ARM_FAIL_SAFE,
         &arm_fail_safe_fields(120, 1),
@@ -1441,14 +1433,13 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
         &mut buf,
     )
     .expect("arm");
-
     let csr = fields(|w| {
         w.octets(Tag::Context(0), &[0x77; 32]).expect("nonce");
         w.bool(Tag::Context(1), true).expect("for update");
     });
     let mut csr_buf = [0u8; 4096];
     let (_, response) = invoke(
-        &device,
+        device,
         opcreds::ID,
         opcreds::CSR_REQUEST,
         &csr,
@@ -1459,9 +1450,6 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
     let elements = response_octets(response, 0);
     let nocsr = matter_kit::attestation::nocsr::NocsrElements::decode(elements).expect("nocsr");
     let public = nocsr.parse_csr().expect("csr").public_key;
-
-    // A new node id on the *same* fabric — which is what a key rotation looks like.
-    const ROTATED: NodeId = NodeId(0xDEDE_DEDE_0001_0055);
     let mut noc = [0u8; CERT_TLV_MAX];
     let noc_len = issue_noc(ROTATED, public, &mut noc);
     let update = fields(|w| {
@@ -1470,7 +1458,7 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
     });
     let mut update_buf = [0u8; 2048];
     let (id, response) = invoke(
-        &device,
+        device,
         opcreds::ID,
         opcreds::UPDATE_NOC,
         &update,
@@ -1483,6 +1471,62 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
         noc_response(response),
         (NocStatus::Ok.value(), Some(index.0))
     );
+    (index, old_key, ROTATED)
+}
+
+/// A new node id on the *same* fabric — which is what a key rotation looks like.
+const ROTATED: NodeId = NodeId(0xDEDE_DEDE_0001_0055);
+
+#[test]
+fn a_rolled_back_update_noc_restores_the_previous_identity() {
+    // §11.10.7.2.2 step 6: "If an UpdateNOC command had been successfully invoked, revert the
+    // state of operational key pair, NOC and ICAC for that Fabric to the state prior to the
+    // Fail-Safe timer being armed". A node that kept the new identity would be unreachable by an
+    // administrator that never learned it.
+    let owned = owned();
+    let device = device(&owned);
+    let challenge = SymmetricKey::new([0x42; 16]);
+    let (index, old_key, _) = update(&device, &challenge);
+    let new_key = device
+        .fabrics
+        .borrow()
+        .find(index)
+        .expect("fabric")
+        .operational_key;
+
+    device
+        .opcreds
+        .on_lifecycle(matter_kit::im::Lifecycle::FailSafeExpired {
+            fabric: Some(index),
+        });
+
+    let fabrics = device.fabrics.borrow();
+    let fabric = fabrics.find(index).expect("still there");
+    assert_eq!(
+        fabric.node_id, DEVICE_NODE_ID,
+        "the previous node id is back"
+    );
+    assert_eq!(fabric.operational_key, old_key, "the previous key is back");
+    drop(fabrics);
+    assert!(device.keys.borrow().public_key(old_key).is_ok());
+    assert!(
+        device.keys.borrow().public_key(new_key).is_err(),
+        "the key the update installed is destroyed"
+    );
+}
+
+#[test]
+fn update_noc_rotates_the_identity_and_destroys_the_old_key_once_committed() {
+    // §11.18.6.9: "The Operational Certificate under the accessing fabric index in the NOCs
+    // list SHALL be updated … such that the Node's Operational Identifier within the Fabric
+    // immediately changes", and step 1.c: "All internal data reflecting the prior operational
+    // identifier of the Node within the Fabric SHALL be revoked and removed." The fabric stops
+    // carrying the old identity at once; its key is held only until the fail-safe decides
+    // between a revert and a commit, and the commit destroys it.
+    let owned = owned();
+    let device = device(&owned);
+    let challenge = SymmetricKey::new([0x42; 16]);
+    let (index, old_key, _) = update(&device, &challenge);
 
     let fabrics = device.fabrics.borrow();
     let fabric = fabrics.find(index).expect("still there");
@@ -1490,8 +1534,15 @@ fn update_noc_rotates_the_identity_and_destroys_the_old_key() {
     assert_ne!(fabric.operational_key, old_key);
     drop(fabrics);
     assert!(
+        device.keys.borrow().public_key(old_key).is_ok(),
+        "held for a revert until the fail-safe resolves"
+    );
+    device
+        .opcreds
+        .on_lifecycle(matter_kit::im::Lifecycle::CommissioningComplete(index));
+    assert!(
         device.keys.borrow().public_key(old_key).is_err(),
-        "the previous operational key must be destroyed"
+        "the previous operational key must be destroyed once the update is committed"
     );
     assert_eq!(
         device.opcreds.take_change(),

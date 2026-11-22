@@ -30,17 +30,17 @@ module anybody could point at. It is the one chapter whose coverage this index c
 
 | Chapter | Sections named | Modules |
 |---|---:|---|
-| 1 | 94 | `clusters::group_key_management`, `clusters::groupcast`, `clusters::groups`, `clusters::identify`, `clusters::level_control`, `clusters::mode`, and 7 more |
-| 2 | 31 | `acl`, `ca`, `clusters`, `clusters::basic_information`, `clusters::electrical_measurement`, `clusters::general_commissioning`, and 16 more |
+| 1 | 94 | `clusters::group_key_management`, `clusters::groupcast`, `clusters::groups`, `clusters::identify`, `clusters::level_control`, `clusters::mode`, and 8 more |
+| 2 | 31 | `acl`, `ca`, `clusters`, `clusters::basic_information`, `clusters::electrical_measurement`, `clusters::general_commissioning`, and 18 more |
 | 3 | 16 | `attestation::nocsr`, `cert`, `cert::der`, `clusters::administrator_commissioning`, `commissioning::window`, `crypto`, and 8 more |
-| 4 | 161 | `bdx::transfer`, `bytes`, `clusters::group_key_management`, `clusters::groupcast`, `clusters::icd_management`, `clusters::network_commissioning`, and 43 more |
-| 5 | 28 | `bytes`, `clusters::administrator_commissioning`, `clusters::commissioner_control`, `clusters::general_commissioning`, `commissioning`, `commissioning::admission`, and 12 more |
-| 6 | 61 | `acl`, `attestation`, `attestation::chain`, `attestation::factory`, `attestation::nocsr`, `ca`, and 28 more |
-| 7 | 46 | `acl`, `clusters::access_control`, `clusters::basic_information`, `clusters::binding`, `clusters::bridged_device_basic_information`, `clusters::commissioner_control`, and 42 more |
-| 8 | 36 | `acl`, `clusters`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::general_commissioning`, `clusters::icd_management`, and 25 more |
-| 9 | 165 | `acl`, `clusters`, `clusters::access_control`, `clusters::binding`, `clusters::bridged_device_basic_information`, `clusters::descriptor`, and 14 more |
-| 10 | 44 | `acl`, `clusters`, `clusters::access_control`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::binding`, and 20 more |
-| 11 | 413 | `acl`, `attestation`, `attestation::nocsr`, `bdx::message`, `bdx::transfer`, `ca`, and 46 more |
+| 4 | 166 | `bdx::transfer`, `bytes`, `clusters::group_key_management`, `clusters::groupcast`, `clusters::icd_management`, `clusters::network_commissioning`, and 48 more |
+| 5 | 28 | `bytes`, `clusters::administrator_commissioning`, `clusters::commissioner_control`, `clusters::general_commissioning`, `commissioning`, `commissioning::admission`, and 14 more |
+| 6 | 61 | `acl`, `attestation`, `attestation::chain`, `attestation::factory`, `attestation::nocsr`, `ca`, and 29 more |
+| 7 | 46 | `acl`, `clusters::access_control`, `clusters::basic_information`, `clusters::binding`, `clusters::bridged_device_basic_information`, `clusters::commissioner_control`, and 44 more |
+| 8 | 38 | `acl`, `clusters`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::general_commissioning`, `clusters::icd_management`, and 28 more |
+| 9 | 165 | `acl`, `clusters`, `clusters::access_control`, `clusters::binding`, `clusters::bridged_device_basic_information`, `clusters::descriptor`, and 17 more |
+| 10 | 44 | `acl`, `clusters`, `clusters::access_control`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::binding`, and 23 more |
+| 11 | 413 | `acl`, `attestation`, `attestation::nocsr`, `bdx::message`, `bdx::transfer`, `ca`, and 50 more |
 | 12 | 7 | `clusters::joint_fabric_administrator`, `clusters::joint_fabric_datastore`, `jf`, `msg::ids` |
 | 14 | 34 | `clusters::tls`, `clusters::tls::certificate_management`, `clusters::tls::client_management` |
 
@@ -62,7 +62,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §1.3.7 | `clusters::groups` |
 | §1.3.7.1 | `clusters::groups` |
 | §1.3.7.1.1 | `clusters::groups` |
-| §1.3.7.1.2 | `im::server` |
+| §1.3.7.1.2 | `im::server`, `node::serve` |
 | §1.3.7.1.3 | `clusters::groups` |
 | §1.3.7.3 | `clusters::groups` |
 | §1.3.7.3.1 | `clusters::groups` |
@@ -162,7 +162,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §2.5.5.5 | `msg::ids` |
 | §2.5.5.6 | `acl`, `msg::ids` |
 | §2.5.6 | `platform`, `platform::os` |
-| §2.5.6.2 | `clusters::groupcast`, `group` |
+| §2.5.6.2 | `clusters::groupcast`, `group`, `node`, `node::driver` |
 | §2.5.6.3 | `lib` |
 | §2.8 | `commissioning` |
 | §2.11.1.1 | `acl`, `config`, `lib` |
@@ -208,6 +208,10 @@ module anybody could point at. It is the one chapter whose coverage this index c
 |---|---|
 | §4.1 | `dm::device` |
 | §4.3 | `clusters::thermostat_suggestions` |
+| §4.3.1 | `discovery::advertiser` |
+| §4.3.1.1 | `discovery::advertiser` |
+| §4.3.1.3 | `discovery::advertiser` |
+| §4.3.2 | `discovery::advertiser` |
 | §4.3.2.1 | `fabric` |
 | §4.3.2.2 | `fabric` |
 | §4.3.2.3 | `fabric` |
@@ -256,7 +260,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §4.7 | `messaging` |
 | §4.7.1 | `messaging` |
 | §4.7.2 | `group::wire`, `messaging`, `msg::security` |
-| §4.8 | `config`, `messaging`, `msg::security` |
+| §4.8 | `config`, `messaging`, `msg::security`, `node` |
 | §4.8.1.1 | `group::wire`, `messaging`, `msg::header`, `msg::security`, `session` |
 | §4.9 | `messaging`, `msg::header`, `msg::security` |
 | §4.9.1 | `crypto`, `crypto::rustcrypto`, `msg::security` |
@@ -265,28 +269,29 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §4.10 | `exchange`, `exchange::table` |
 | §4.10.3.1 | `messaging` |
 | §4.10.5.2 | `exchange::table`, `messaging` |
-| §4.10.5.3 | `exchange::table`, `messaging` |
+| §4.10.5.3 | `exchange::table`, `messaging`, `node` |
 | §4.11 | `messaging`, `msg::ids`, `sc`, `sc::case`, `sc::channel` |
-| §4.11.1.1 | `messaging`, `sc::channel`, `session` |
+| §4.11.1.1 | `messaging`, `node`, `sc::channel`, `session` |
 | §4.11.1.2 | `sc::status` |
 | §4.11.1.3 | `sc::channel` |
-| §4.11.1.4 | `messaging` |
+| §4.11.1.4 | `messaging`, `node` |
 | §4.11.1.5 | `sc::status` |
 | §4.12 | `error`, `exchange`, `exchange::mrp`, `messaging`, `msg::header` |
 | §4.12.1 | `messaging`, `msg::header` |
-| §4.12.2.1 | `exchange::mrp`, `messaging`, `platform::time` |
-| §4.12.2.2 | `exchange::mrp`, `messaging`, `msg::counter` |
+| §4.12.2 | `messaging` |
+| §4.12.2.1 | `exchange::mrp`, `messaging`, `node`, `node::outbox`, `platform::time` |
+| §4.12.2.2 | `exchange::mrp`, `messaging`, `msg::counter`, `node` |
 | §4.12.3 | `exchange::mrp` |
 | §4.12.4 | `exchange::table`, `messaging`, `platform`, `session` |
 | §4.12.5 | `exchange::mrp` |
-| §4.12.5.2.2 | `messaging` |
+| §4.12.5.2.2 | `messaging`, `node` |
 | §4.12.7.1 | `messaging`, `sc` |
 | §4.13 | `im::persist`, `session` |
 | §4.13.1 | `lib`, `sc`, `sc::case`, `transport` |
 | §4.13.2 | `session` |
 | §4.13.2.1 | `messaging`, `msg::ids` |
-| §4.13.2.4 | `sc::channel`, `session` |
-| §4.13.3.1 | `messaging` |
+| §4.13.2.4 | `node`, `sc::channel`, `session` |
+| §4.13.3.1 | `messaging`, `node::followups` |
 | §4.14 | `sc` |
 | §4.14.1 | `sc::case`, `sc::channel`, `sc::pase`, `sc::status`, `session` |
 | §4.14.1.2 | `sc::case`, `sc::pase`, `tlv::reader` |
@@ -309,9 +314,9 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §4.15.2 | `commissioning::commissioner`, `platform` |
 | §4.15.2.3 | `error`, `messaging`, `sc::status`, `transport::tcp` |
 | §4.16 | `group`, `group::wire`, `messaging` |
-| §4.16.1 | `group`, `group::peers`, `group::wire`, `im::server` |
+| §4.16.1 | `group`, `group::peers`, `group::wire`, `im::server`, `node` |
 | §4.16.2 | `group::keys`, `group::wire`, `messaging` |
-| §4.16.3 | `group::wire` |
+| §4.16.3 | `group::wire`, `node`, `node::serve` |
 | §4.17 | `group`, `group::keys` |
 | §4.17.2 | `fabric`, `group`, `group::keys` |
 | §4.17.2.1 | `fabric`, `group::keys` |
@@ -375,7 +380,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §5.1 | `commissioning::payload` |
 | §5.1.1 | `commissioning::payload` |
 | §5.1.1.1 | `commissioning::payload` |
-| §5.1.1.3 | `clusters::commissioner_control`, `commissioning::payload` |
+| §5.1.1.3 | `clusters::commissioner_control`, `commissioning::payload`, `discovery::advertiser` |
 | §5.1.1.5 | `commissioning::payload` |
 | §5.1.1.6 | `commissioning::payload`, `crypto::spake2p` |
 | §5.1.3.1 | `commissioning::payload` |
@@ -396,7 +401,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §5.4.2.5.4 | `transport::ble` |
 | §5.4.2.5.6 | `bytes`, `transport::ble` |
 | §5.4.2.5.7 | `transport::ble` |
-| §5.5 | `clusters::general_commissioning`, `commissioning`, `commissioning::admission`, `commissioning::commissioner`, `error`, `exchange::table`, `lib`, `messaging`, `sc`, `sc::channel` |
+| §5.5 | `clusters::general_commissioning`, `commissioning`, `commissioning::admission`, `commissioning::commissioner`, `error`, `exchange::table`, `lib`, `messaging`, `node`, `sc`, `sc::channel` |
 | §5.6.2 | `clusters::administrator_commissioning` |
 | §5.9 | `clusters::general_commissioning` |
 | §5.9.3 | `clusters::general_commissioning` |
@@ -416,7 +421,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §6.2.2.3 | `attestation::chain` |
 | §6.2.2.4 | `attestation::chain`, `attestation::factory` |
 | §6.2.2.5 | `attestation::chain` |
-| §6.2.3 | `attestation`, `attestation::factory`, `commissioning::commissioner`, `error`, `sc::channel`, `session` |
+| §6.2.3 | `attestation`, `attestation::factory`, `commissioning::commissioner`, `error`, `node::serve`, `sc::channel`, `session` |
 | §6.2.3.1 | `attestation`, `attestation::chain`, `der` |
 | §6.2.4 | `attestation::chain` |
 | §6.3 | `attestation`, `clusters::operational_credentials` |
@@ -465,7 +470,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §6.6.6 | `acl`, `clusters::access_control` |
 | §6.6.6.1.3 | `acl`, `im::server` |
 | §6.6.6.2 | `acl`, `clusters::descriptor`, `clusters::icd_management`, `config`, `dm::access`, `dm::meta`, `dm::node`, `im::server` |
-| §6.6.6.3 | `acl`, `cert::chain`, `clusters::access_control`, `clusters::general_commissioning`, `im::server`, `im::subscription`, `session` |
+| §6.6.6.3 | `acl`, `cert::chain`, `clusters::access_control`, `clusters::general_commissioning`, `im::server`, `im::subscription`, `node::serve`, `session` |
 
 ### Chapter 7
 
@@ -485,7 +490,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §7.7.5 | `dm::access`, `dm::meta`, `im::server`, `im::status` |
 | §7.7.8 | `dm::meta` |
 | §7.10 | `dm`, `dm::meta` |
-| §7.10.3 | `dm::version`, `im::ib`, `im::server`, `im::subscription` |
+| §7.10.3 | `dm::version`, `im::ib`, `im::server`, `im::subscription`, `node` |
 | §7.11 | `dm::meta` |
 | §7.12 | `clusters::identify`, `dm::meta`, `dm::spec`, `tlv::codec` |
 | §7.12.1 | `dm::meta` |
@@ -495,12 +500,12 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §7.13.3 | `clusters::basic_information`, `clusters::descriptor`, `dm::global` |
 | §7.13.4 | `dm::device`, `dm::global`, `dm::meta` |
 | §7.13.5 | `dm::global`, `dm::meta`, `dm::spec` |
-| §7.14 | `clusters::access_control`, `clusters::bridged_device_basic_information`, `clusters::commissioner_control`, `clusters::device_energy_management`, `clusters::energy_evse`, `clusters::ota_requestor`, `clusters::water_heater_management`, `dm`, `dm::events`, `dm::meta`, `im::server` |
+| §7.14 | `clusters::access_control`, `clusters::bridged_device_basic_information`, `clusters::commissioner_control`, `clusters::device_energy_management`, `clusters::energy_evse`, `clusters::ota_requestor`, `clusters::water_heater_management`, `dm`, `dm::events`, `dm::meta`, `im::server`, `node` |
 | §7.14.1 | `dm::events` |
 | §7.14.1.1 | `dm::events`, `im::ib`, `im::persist`, `im::server` |
 | §7.14.1.2 | `dm::events`, `im::ib` |
 | §7.14.2 | `clusters::access_control`, `clusters::bridged_device_basic_information`, `dm::events`, `dm::spec` |
-| §7.14.4 | `clusters::access_control`, `dm::events` |
+| §7.14.4 | `clusters::access_control`, `dm::events`, `node::followups` |
 | §7.15 | `dm`, `dm::meta`, `im`, `im::atomic` |
 | §7.15.1 | `im::atomic` |
 | §7.15.2 | `im::atomic` |
@@ -522,6 +527,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 
 | Section | Named in |
 |---|---|
+| §8 | `node::serve` |
 | §8.1.1 | `im::message`, `lib`, `sc` |
 | §8.1.2 | `im` |
 | §8.2.1 | `im::server` |
@@ -532,26 +538,27 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §8.4.3 | `im::dispatch`, `im::ib`, `im::server` |
 | §8.4.3.2 | `dm`, `dm::access`, `dm::node`, `dm::version`, `im`, `im::dispatch`, `im::path`, `im::server` |
 | §8.4.3.3 | `dm::events`, `dm::node`, `im::dispatch`, `im::server` |
-| §8.5 | `dm::events`, `im`, `im::client`, `im::message`, `im::persist`, `im::server`, `im::subscription`, `messaging` |
+| §8.5 | `dm::events`, `im`, `im::client`, `im::message`, `im::persist`, `im::server`, `im::subscription`, `messaging`, `node` |
 | §8.5.1 | `im::server` |
+| §8.5.2 | `node`, `node::interactions`, `node::serve` |
 | §8.5.2.2 | `im::persist`, `im::subscription` |
 | §8.5.2.3 | `im::message`, `im::subscription` |
-| §8.5.3 | `dm::version`, `im::client`, `messaging`, `session` |
+| §8.5.3 | `dm::version`, `im::client`, `messaging`, `node`, `node::serve`, `session` |
 | §8.5.3.1 | `im::persist`, `im::subscription` |
 | §8.5.3.2 | `im::client`, `im::message`, `im::server`, `im::subscription` |
-| §8.5.3.4 | `dm::events`, `im::persist`, `im::server`, `im::subscription` |
+| §8.5.3.4 | `dm::events`, `im::persist`, `im::server`, `im::subscription`, `node::serve` |
 | §8.5.4 | `im::client` |
 | §8.6 | `clusters::on_off`, `im`, `im::server`, `im::subscription` |
 | §8.6.2 | `im::server`, `im::subscription` |
 | §8.7 | `dm::access`, `im::dispatch`, `im::message` |
-| §8.7.2.3 | `im::dispatch` |
+| §8.7.2.3 | `im::dispatch`, `node`, `node::serve` |
 | §8.7.3.2 | `im`, `im::dispatch`, `im::server`, `im::timed` |
 | §8.7.3.3 | `clusters::basic_information`, `im::server` |
 | §8.7.4 | `clusters::administrator_commissioning`, `im`, `im::dispatch`, `im::server`, `im::timed` |
 | §8.7.4.3 | `im::dispatch`, `im::timed` |
 | §8.8 | `dm::node`, `im::dispatch` |
 | §8.8.2.2 | `dm::node`, `im::server` |
-| §8.8.2.3 | `clusters`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::general_commissioning`, `clusters::icd_management`, `clusters::operational_credentials`, `dm::access`, `dm::node`, `im`, `im::dispatch`, `im::server`, `im::status`, `im::timed` |
+| §8.8.2.3 | `clusters`, `clusters::administrator_commissioning`, `clusters::basic_information`, `clusters::general_commissioning`, `clusters::icd_management`, `clusters::operational_credentials`, `dm::access`, `dm::node`, `im`, `im::dispatch`, `im::server`, `im::status`, `im::timed`, `node`, `node::serve` |
 | §8.8.3.1 | `im::server` |
 | §8.9 | `im::path` |
 | §8.9.2 | `clusters` |
@@ -694,7 +701,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §9.10.6.6 | `acl`, `clusters::access_control`, `config` |
 | §9.10.6.7 | `acl`, `clusters::access_control`, `config` |
 | §9.10.9 | `clusters::access_control` |
-| §9.10.9.1 | `clusters::access_control` |
+| §9.10.9.1 | `clusters::access_control`, `node`, `node::followups`, `node::serve` |
 | §9.13 | `clusters::bridged_device_basic_information` |
 | §9.13.5 | `clusters::bridged_device_basic_information` |
 | §9.13.5.1 | `clusters::bridged_device_basic_information` |
@@ -736,7 +743,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §10.2.1 | `im`, `im::dispatch`, `im::message` |
 | §10.2.2 | `im::path` |
 | §10.2.2.2 | `im::message` |
-| §10.2.3 | `dm::events`, `dm::node`, `error`, `im`, `im::client`, `im::dispatch`, `im::message`, `im::server`, `im::subscription`, `tlv::writer` |
+| §10.2.3 | `dm::events`, `dm::node`, `error`, `im`, `im::client`, `im::dispatch`, `im::message`, `im::server`, `im::subscription`, `node`, `node::interactions`, `node::serve`, `tlv::writer` |
 | §10.6 | `im`, `im::ib`, `im::message` |
 | §10.6.1 | `im::path` |
 | §10.6.2 | `im::message`, `im::path`, `im::server` |
@@ -768,7 +775,7 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §10.7.2 | `im::message` |
 | §10.7.2.4 | `im::dispatch` |
 | §10.7.3 | `im::message`, `im::server` |
-| §10.7.3.2 | `im::server` |
+| §10.7.3.2 | `im::server`, `node` |
 | §10.7.4 | `im::message` |
 | §10.7.5 | `im::message` |
 | §10.7.6 | `im::message` |
@@ -882,11 +889,11 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §11.10.7 | `clusters::general_commissioning` |
 | §11.10.7.1 | `clusters::general_commissioning` |
 | §11.10.7.2 | `clusters`, `clusters::administrator_commissioning`, `clusters::general_commissioning`, `clusters::operational_credentials`, `commissioning::commissioner`, `commissioning::failsafe`, `commissioning::window`, `im::server` |
-| §11.10.7.2.2 | `clusters::administrator_commissioning`, `clusters::general_commissioning`, `clusters::network_commissioning`, `clusters::operational_credentials`, `commissioning::failsafe`, `im::server` |
+| §11.10.7.2.2 | `clusters::administrator_commissioning`, `clusters::general_commissioning`, `clusters::network_commissioning`, `clusters::operational_credentials`, `commissioning::failsafe`, `im::server`, `node`, `node::followups` |
 | §11.10.7.3 | `clusters::general_commissioning`, `commissioning::commissioner` |
 | §11.10.7.4 | `clusters`, `clusters::basic_information`, `clusters::general_commissioning`, `commissioning::commissioner` |
 | §11.10.7.5 | `clusters::general_commissioning`, `commissioning::commissioner` |
-| §11.10.7.6 | `clusters`, `clusters::general_commissioning`, `clusters::network_commissioning`, `commissioning::commissioner`, `commissioning::failsafe`, `commissioning::window`, `im::server` |
+| §11.10.7.6 | `clusters`, `clusters::general_commissioning`, `clusters::network_commissioning`, `clusters::operational_credentials`, `commissioning::commissioner`, `commissioning::failsafe`, `commissioning::window`, `im::server`, `node`, `node::followups` |
 | §11.10.7.7 | `clusters::general_commissioning`, `commissioning::commissioner` |
 | §11.12 | `clusters::general_diagnostics` |
 | §11.12.1 | `clusters::general_diagnostics` |
@@ -1065,13 +1072,13 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §11.18.6.4 | `clusters::operational_credentials` |
 | §11.18.6.5 | `ca`, `clusters::operational_credentials`, `commissioning::commissioner` |
 | §11.18.6.6 | `clusters::operational_credentials`, `commissioning::commissioner` |
-| §11.18.6.7 | `clusters::operational_credentials`, `im::server` |
-| §11.18.6.8 | `acl`, `clusters::access_control`, `clusters::operational_credentials`, `commissioning::commissioner`, `fabric`, `group::keys`, `messaging`, `sc::channel` |
+| §11.18.6.7 | `clusters::operational_credentials`, `im::server`, `node::serve` |
+| §11.18.6.8 | `acl`, `clusters::access_control`, `clusters::operational_credentials`, `commissioning::commissioner`, `fabric`, `group::keys`, `messaging`, `node`, `node::followups`, `sc::channel` |
 | §11.18.6.8.1 | `clusters::group_key_management` |
 | §11.18.6.9 | `clusters::operational_credentials`, `commissioning::commissioner`, `fabric` |
 | §11.18.6.10 | `clusters::operational_credentials`, `commissioning::commissioner` |
 | §11.18.6.11 | `clusters::operational_credentials` |
-| §11.18.6.12 | `clusters::access_control`, `clusters::operational_credentials`, `fabric`, `im::server`, `messaging` |
+| §11.18.6.12 | `clusters::access_control`, `clusters::operational_credentials`, `fabric`, `im::server`, `messaging`, `node`, `node::followups` |
 | §11.18.6.13 | `clusters::operational_credentials`, `commissioning::commissioner`, `fabric` |
 | §11.18.6.14 | `clusters::operational_credentials`, `fabric` |
 | §11.18.6.15 | `clusters::operational_credentials` |
@@ -1083,12 +1090,12 @@ module anybody could point at. It is the one chapter whose coverage this index c
 | §11.19.5.1 | `commissioning::window` |
 | §11.19.6 | `clusters::administrator_commissioning`, `im::ib` |
 | §11.19.6.1 | `clusters::administrator_commissioning` |
-| §11.19.7 | `commissioning::window` |
+| §11.19.7 | `commissioning::window`, `discovery::advertiser` |
 | §11.19.7.1 | `clusters::administrator_commissioning`, `clusters::general_commissioning`, `commissioning::window` |
 | §11.19.7.2 | `clusters::administrator_commissioning`, `commissioning::window` |
 | §11.19.7.3 | `clusters::administrator_commissioning`, `commissioning::window` |
 | §11.19.8 | `clusters::administrator_commissioning` |
-| §11.19.8.1 | `clusters::administrator_commissioning`, `clusters::commissioner_control`, `clusters::general_commissioning`, `clusters::joint_fabric_administrator`, `commissioning::window`, `crypto::spake2p`, `sc::channel` |
+| §11.19.8.1 | `clusters::administrator_commissioning`, `clusters::commissioner_control`, `clusters::general_commissioning`, `clusters::joint_fabric_administrator`, `commissioning::window`, `crypto::spake2p`, `discovery::advertiser`, `sc::channel` |
 | §11.19.8.1.1 | `clusters::administrator_commissioning`, `commissioning::window` |
 | §11.19.8.2 | `clusters::administrator_commissioning` |
 | §11.19.8.3 | `clusters::administrator_commissioning` |

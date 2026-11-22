@@ -403,7 +403,7 @@ Group Key Management and both Label clusters — and an endpoint 1 that claims `
 furnishes it. `tests/device_types.rs` runs `validate_endpoint`
 over the very descriptors the example builds, so the claim cannot outlive the furnishing.
 
-**Access Control keeps the audit trail, and a device has to let it.** §9.10.9.1 asks for an
+**Access Control keeps the audit trail.** §9.10.9.1 asks for an
 `AccessControlEntryChanged` for every entry added, changed or removed, carrying the entry's new
 value and naming who did it — the node id over CASE, the passcode id over PASE. Three things
 about that are easy to get wrong and invisible afterwards:
@@ -415,6 +415,6 @@ about that are easy to get wrong and invisible afterwards:
 - A whole-list write is compared **position by position**. A list attribute's entry is its index,
   so replacing `[admin]` with `[admin, operator]` changes one and adds one. Reporting it as a
   removal and two additions tells a controller it has lost an entry it still has.
-- The cluster records what happened; the *device* turns each record into an event and tells the
-  subscription table about it. A device that does the first and not the second answers every read
-  correctly and leaves a subscriber that asked to be told waiting out its maximum interval.
+- The cluster records what happened; `node::Runtime` turns each record into an event and tells
+  the subscription table about it. Without the second step every read answers correctly and a
+  subscriber that asked to be told waits out its maximum interval.

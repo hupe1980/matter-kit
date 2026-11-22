@@ -349,7 +349,7 @@ fn write_extension(writer: &mut DerWriter<'_>, extension: &Extension<'_>) -> Res
             // X.509 certificate." The caller walks the list in reverse into a writer that
             // prepends, so the original order comes back out, and this blob lands where it
             // was — which is what makes the regenerated DER byte-identical and the signature
-            // verifiable (§6.5.2, R12).
+            // verifiable (§6.5.2).
             return writer.slice(der);
         }
     };

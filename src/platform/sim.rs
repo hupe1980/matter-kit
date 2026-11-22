@@ -177,6 +177,9 @@ pub struct SimNet {
     flight: RefCell<Deque<InFlight, QUEUE>>,
     /// Deadlines that sleeping tasks are waiting for.
     deadlines: RefCell<Deque<Instant, QUEUE>>,
+    /// How many times in a row `advance_to_next_event` found something already due and left
+    /// time where it was. See there.
+    stalls: Cell<u8>,
     /// Counters, for tests that assert on what the network did.
     sent: Cell<u32>,
     delivered: Cell<u32>,
@@ -194,6 +197,7 @@ impl SimNet {
             impairment: Cell::new(Impairment::default()),
             flight: RefCell::new(Deque::new()),
             deadlines: RefCell::new(Deque::new()),
+            stalls: Cell::new(0),
             sent: Cell::new(0),
             delivered: Cell::new(0),
             dropped: Cell::new(0),
@@ -254,23 +258,34 @@ impl SimNet {
     /// `false` means nothing can make progress: every task is blocked on something that
     /// will never happen. That is a deadlock, and in a simulation it is a bug in the code
     /// under test rather than a reason to wait longer.
+    ///
+    /// Something already due is given a couple of polls to be consumed before time moves past
+    /// it. A datagram for a node that has stopped reading — a controller whose task finished —
+    /// is due for ever, and waiting on it would freeze the clock under every other task.
     pub fn advance_to_next_event(&self) -> bool {
+        let now = self.now.get();
+        let stalled = self.stalls.get() >= 2;
         let mut next = Instant::MAX;
-        for d in self.deadlines.borrow().iter() {
-            if *d < next {
-                next = *d;
-            }
-        }
-        for f in self.flight.borrow().iter() {
-            if f.at < next {
-                next = f.at;
+        let times = self
+            .deadlines
+            .borrow()
+            .iter()
+            .copied()
+            .chain(self.flight.borrow().iter().map(|f| f.at))
+            .collect::<heapless::Vec<Instant, { QUEUE * 2 }>>();
+        for at in times {
+            if at < next && !(stalled && at <= now) {
+                next = at;
             }
         }
         if next == Instant::MAX {
             return false;
         }
-        if next > self.now.get() {
+        if next > now {
             self.now.set(next);
+            self.stalls.set(0);
+        } else {
+            self.stalls.set(self.stalls.get().saturating_add(1));
         }
         // Deadlines that have now passed are no longer pending.
         let mut kept: Deque<Instant, QUEUE> = Deque::new();

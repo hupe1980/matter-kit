@@ -422,6 +422,26 @@ pub struct OperationalCredentials<'a, C: Config, K: KeyStore, R: Rng, const N: u
     pending_csr: Cell<Option<PendingCsr>>,
     /// What the last credential-changing command left for the device.
     change: Cell<Option<FabricChange>>,
+    /// The identity `UpdateNOC` replaced, held until the fail-safe resolves.
+    ///
+    /// §11.10.7.2.2 step 6: "If an UpdateNOC command had been successfully invoked, revert the
+    /// state of operational key pair, NOC and ICAC for that Fabric to the state prior to the
+    /// Fail-Safe timer being armed". A revert needs the prior key, so the key is held here rather
+    /// than destroyed — and nothing reaches it here: it is not on the fabric, so CASE cannot use
+    /// it, which is what §11.18.6.9 step 1.c's "revoked and removed, to an outcome equivalent to
+    /// the disappearance of the prior Node" asks of it. [`Self::commit_update`] destroys it once
+    /// the update is permanent; [`Self::revert_update`] puts it back. One slot, because a second
+    /// `UpdateNOC` inside one fail-safe is already `CONSTRAINT_ERROR`.
+    replaced: RefCell<Option<Replaced>>,
+}
+
+/// What [`OperationalCredentials`] keeps of an identity `UpdateNOC` replaced.
+#[derive(Debug)]
+struct Replaced {
+    index: FabricIndex,
+    node_id: NodeId,
+    credentials: Credentials,
+    operational_key: KeyHandle,
 }
 
 impl<'a, C: Config, K: KeyStore, R: Rng, const N: usize> OperationalCredentials<'a, C, K, R, N> {
@@ -443,6 +463,50 @@ impl<'a, C: Config, K: KeyStore, R: Rng, const N: usize> OperationalCredentials<
             pending_root: RefCell::new(None),
             pending_csr: Cell::new(None),
             change: Cell::new(None),
+            replaced: RefCell::new(None),
+        }
+    }
+
+    /// Reverts an `UpdateNOC` (§11.10.7.2.2 step 6), restoring the fabric's previous NOC, ICAC,
+    /// node id and operational key, and destroying the key the update installed.
+    ///
+    /// Returns whether there was an update to revert. Idempotent, and a no-op for any other
+    /// fabric — `Cleanup::revert_noc_for` names the one to call it with.
+    pub fn revert_update(&self, index: FabricIndex) -> bool {
+        let Some(replaced) = self.take_replaced(index) else {
+            return false;
+        };
+        let mut table = self.fabrics.borrow_mut();
+        let Some(fabric) = table.find_mut(index) else {
+            // The fabric went in the same rollback; its keys went with it, apart from this one.
+            drop(table);
+            let _ = self.keys.borrow_mut().remove(replaced.operational_key);
+            return false;
+        };
+        let installed = core::mem::replace(&mut fabric.operational_key, replaced.operational_key);
+        fabric.node_id = replaced.node_id;
+        fabric.credentials = replaced.credentials;
+        drop(table);
+        let _ = self.keys.borrow_mut().remove(installed);
+        true
+    }
+
+    /// Makes an `UpdateNOC` permanent, destroying the key it replaced (§11.18.6.9 step 1.c).
+    ///
+    /// What `CommissioningComplete` does for an update (§11.10.7.6); also reached through
+    /// [`Lifecycle::CommissioningComplete`](crate::im::Lifecycle). Idempotent.
+    pub fn commit_update(&self) {
+        if let Some(replaced) = self.replaced.borrow_mut().take() {
+            let _ = self.keys.borrow_mut().remove(replaced.operational_key);
+        }
+    }
+
+    fn take_replaced(&self, index: FabricIndex) -> Option<Replaced> {
+        let mut slot = self.replaced.borrow_mut();
+        if slot.as_ref().is_some_and(|r| r.index == index) {
+            slot.take()
+        } else {
+            None
         }
     }
 
@@ -902,16 +966,22 @@ impl<C: Config, K: KeyStore, R: Rng, const N: usize> OperationalCredentials<'_, 
         let Some(fabric) = table.find_mut(accessing) else {
             return Ok(NocStatus::InvalidFabricIndex);
         };
-        let previous_key = fabric.operational_key;
+        let previous = Replaced {
+            index: accessing,
+            node_id: fabric.node_id,
+            credentials: core::mem::replace(&mut fabric.credentials, credentials),
+            operational_key: core::mem::replace(&mut fabric.operational_key, pending.key),
+        };
         fabric.node_id = identity.node_id;
-        fabric.credentials = credentials;
-        fabric.operational_key = pending.key;
         drop(table);
 
         // Step 1.c: "All internal data reflecting the prior operational identifier … SHALL be
-        // revoked and removed." The previous operational key is the first of those, and it is
-        // the one whose survival would silently keep the old identity usable.
-        let _ = self.keys.borrow_mut().remove(previous_key);
+        // revoked and removed." The fabric no longer carries the previous identity, so nothing
+        // can use it; its key is held only until the fail-safe decides between §11.10.7.2.2
+        // step 6's revert and §11.10.7.6's commit (see `replaced`).
+        if let Some(stale) = self.replaced.borrow_mut().replace(previous) {
+            let _ = self.keys.borrow_mut().remove(stale.operational_key);
+        }
         self.pending_csr.set(None);
 
         self.fail_safe
@@ -1328,6 +1398,24 @@ impl<C: Config, K: KeyStore, R: Rng, const N: usize> ClusterHandler
     ) -> Result<Option<CommandId>, StatusIb> {
         self.run(resolved.command.id, fields, ctx, w, tag)
             .map_err(StatusIb::from)
+    }
+
+    fn on_lifecycle(&self, event: crate::im::Lifecycle) {
+        match event {
+            crate::im::Lifecycle::CommissioningComplete(_) => self.commit_update(),
+            crate::im::Lifecycle::FailSafeExpired { .. } => {
+                let replaced = self.replaced.borrow().as_ref().map(|r| r.index);
+                if let Some(index) = replaced {
+                    self.revert_update(index);
+                }
+                self.discard_pending();
+            }
+            crate::im::Lifecycle::FabricRemoved(index) => {
+                if let Some(replaced) = self.take_replaced(index) {
+                    let _ = self.keys.borrow_mut().remove(replaced.operational_key);
+                }
+            }
+        }
     }
 }
 

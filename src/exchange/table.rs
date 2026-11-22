@@ -131,9 +131,11 @@ impl Exchange {
         if self.mrp.is_awaiting_ack() {
             return false;
         }
+        // `>=`, matching `reap_deadline`: a deadline at which `reap` does nothing is a deadline a
+        // loop wakes for and then wakes for again, at the same instant, for ever.
         now.as_micros()
             .saturating_sub(self.last_activity.as_micros())
-            > idle.as_micros()
+            >= idle.as_micros()
     }
 
     /// The same exchange with its peer known from the start — what an initiator has, since
